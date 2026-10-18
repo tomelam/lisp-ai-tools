@@ -40,4 +40,6 @@
            (some (lambda (specializer) (and (typep specializer 'class) (symbol-library-p (class-name specializer))))
                  (sb-kernel::redefinition-with-defmethod-specializers condition)))))))
 
-(setf sb-ext:*muffled-warnings* '(and sb-kernel:redefinition-warning (satisfies library-redefinition-p)))
+(setf sb-ext:*muffled-warnings*
+        '(or sb-kernel:uninteresting-redefinition
+             (and sb-kernel:redefinition-warning (satisfies library-redefinition-p))))
