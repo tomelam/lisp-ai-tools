@@ -22,6 +22,8 @@
     (let ((text (make-string (file-length s))))
       (subseq text 0 (read-sequence text s)))))
 
+(defvar *comment-ranges* 'nil "While text is read: the (start . end) of each comment, newest first.")
+
 (defclass span-client (eclector.parse-result:parse-result-client) nil
           (:documentation
            "An Eclector client that records, for every expression read, where it starts and ends in the text."))
@@ -37,7 +39,9 @@
   (make-node :expression result :start (car source) :end (cdr source) :children (remove nil children)))
 
 (defmethod eclector.parse-result:make-skipped-input-result ((client span-client) stream reason children source)
-  "Comments and forms the features exclude are not nodes; their text stays where it is."
+  "Comments and forms the features exclude are not nodes; their text stays where it is. Comments are noted by position."
+  (when (or (eq reason :block-comment) (and (consp reason) (eq (car reason) :line-comment)))
+    (push source *comment-ranges*))
   nil)
 
 (defmethod eclector.reader:interpret-symbol ((client span-client) input-stream package-indicator symbol-name internp)
@@ -64,13 +68,15 @@
   (sb-impl::%default-comma-constructor :expr form :kind 2))
 
 (defun read-nodes (text scratch)
-  "The top-level nodes of TEXT, read in SCRATCH, each with the nodes inside it. A form that a #+ or #- excludes is not
-   seen."
-  (let ((*read-eval* nil) (*package* scratch) (client (make-instance 'span-client)))
+  "The top-level nodes of TEXT, read in SCRATCH, each with the nodes inside it; second value, the (start . end) of each
+   comment in TEXT, in order. A form that a #+ or #- excludes is not seen."
+  (let ((*read-eval* nil) (*package* scratch) (client (make-instance 'span-client)) (*comment-ranges* 'nil))
     (with-input-from-string (in text)
-      (loop for node = (eclector.parse-result:read client in nil :eof)
-            until (eq node :eof)
-            collect node))))
+      (let ((nodes
+             (loop for node = (eclector.parse-result:read client in nil :eof)
+                   until (eq node :eof)
+                   collect node)))
+        (values nodes (reverse *comment-ranges*))))))
 
 (defun same-form-p (a b)
   "Whether the forms A and B, read from text, are the same form: EQUALP, except that strings and characters are compared
@@ -107,15 +113,49 @@
        (let ((name (second form)))
          (cond ((symbolp name) (symbol-name name)) ((stringp name) name)))))
 
+(defun forms-matching (nodes key scratch)
+  "The top-level NODES that KEY names. A string names a form by the symbol or string after its operator; (:form TEXT)
+   names the form that reads as TEXT, for a form with no such name, like a (setf ...) or a (let ...)."
+  (if (and (consp key) (eq (first key) :form))
+      (let ((expression (node-expression (only-node (second key) scratch "The anchor"))))
+        (remove-if-not (lambda (node) (same-form-p (node-expression node) expression)) nodes))
+      (remove-if-not (lambda (node) (equal (form-name (node-expression node)) key)) nodes)))
+
 (defun printed (source scratch)
-  "SOURCE, text of one or more forms, printed by the printer, separated by blank lines."
-  (let ((*package* scratch))
-    (with-output-to-string (out)
-      (loop for node in (read-nodes source scratch)
-            for first = t then nil
-            do (unless first
-                 (format out "~%~%")) (write (node-expression node) :stream out :pretty t :case :downcase :right-margin
-                                             120)))))
+  "SOURCE, text of one or more forms and the comments between them, printed by the printer: the forms are laid out by the
+   printer and separated by blank lines, the comments are kept as typed (one after a form on its line stays there). A
+   comment inside a form is an error, because the printer cannot keep it."
+  (multiple-value-bind (nodes comments)
+      (read-nodes source scratch)
+    (dolist (comment comments)
+      (when (some (lambda (node) (and (< (node-start node) (car comment)) (< (car comment) (node-end node)))) nodes)
+        (error "A comment inside a form cannot be printed, and would be lost: ~s"
+               (subseq source (car comment) (cdr comment)))))
+    (let ((*package* scratch))
+      (with-output-to-string (out)
+        (let ((position 0) (previous-end nil) (first t))
+          (flet ((comment-text (comment)
+                   (string-right-trim '(#\  #\Tab #\Newline) (subseq source (car comment) (cdr comment))))
+                 (on-line-of-previous-p (comment)
+                   (and previous-end (not (find #\Newline source :start previous-end :end (car comment)))))
+                 (comments-between (from to)
+                   (remove-if-not (lambda (comment) (and (>= (car comment) from) (<= (cdr comment) to))) comments)))
+            (dolist (node nodes)
+              (let* ((before (comments-between position (node-start node)))
+                     (trailing (remove-if-not #'on-line-of-previous-p before))
+                     (leading (remove-if (lambda (comment) (member comment trailing)) before)))
+                (dolist (comment trailing) (format out "  ~a" (comment-text comment)))
+                (unless first (format out "~%~%"))
+                (dolist (comment leading) (format out "~a~%" (comment-text comment)))
+                (write (node-expression node) :stream out :pretty t :case :downcase :right-margin 120)
+                (setf position (node-end node)
+                      previous-end (node-end node)
+                      first nil)))
+            (let* ((after (comments-between position (length source)))
+                   (trailing (remove-if-not #'on-line-of-previous-p after))
+                   (leading (remove-if (lambda (comment) (member comment trailing)) after)))
+              (dolist (comment trailing) (format out "  ~a" (comment-text comment)))
+              (when leading (format out "~%~%~{~a~^~%~}" (mapcar #'comment-text leading))))))))))
 
 (defun write-file (path text)
   (with-open-file (s path :direction :output :if-exists :supersede :external-format :utf-8) (write-string text s)))
@@ -140,16 +180,20 @@
         (incf end)))
     end))
 
-(defun edit (path &key replace delete insert-before append header)
-  "Change the top-level forms of the file PATH. REPLACE and INSERT-BEFORE are alists of (name . source-text), DELETE is
-   a list of names, APPEND and HEADER are text. Every other byte stays as it was. Deleting a form takes the comment
-   after it on its line with it, not the comments above it. An error, and no write, when a name is not exactly one
-   form, when a form to replace or delete is governed by #+ or #-, or when the result does not read back as the other
-   forms, unchanged and in order."
+(defun after-trailing-comment (text end)
+  "END, moved to the end of the line when a comment follows it there, so an insertion after a form lands after its own
+   trailing comment."
+  (let ((next (or (position-if-not #'blank-p text :start end) (length text))))
+    (if (and (< next (length text)) (char= (char text next) #\;))
+        (or (position #\Newline text :start next) (length text))
+        end)))
+
+(defun edit (path &key replace delete insert-before insert-after append header)
+  "Change the top-level forms of the file PATH. REPLACE, INSERT-BEFORE and INSERT-AFTER are alists of (key . source-text), DELETE is a list of keys, APPEND and HEADER are text. A key is a form's name (the symbol or string after its operator, in upper case) or, for a form with no name, (:form TEXT): the form that reads as TEXT. Every other byte stays as it was. New source text may carry comments between its forms, kept as typed; a comment inside a form is refused. Deleting a form takes the comment after it on its line with it, not the comments above it. An error, and no write, when a key is not exactly one form, when a form to replace or delete is governed by #+ or #-, or when the result does not read back as the other forms, unchanged and in order."
   (with-scratch-package (scratch)
    (let* ((text (file-text path)) (nodes (read-nodes text scratch)) (operations 'nil) (removed 'nil) (added 0))
      (flet ((form-named (name what)
-              (let ((found (remove-if-not (lambda (node) (equal (form-name (node-expression node)) name)) nodes)))
+              (let ((found (forms-matching nodes name scratch)))
                 (unless (= (length found) 1)
                   (error "~d top-level forms are named ~s in ~a (to ~a); expected 1" (length found) name path what))
                 (first found)))
@@ -168,11 +212,17 @@
                     (length text))
                 header)
           operations))
-       (loop for (name . source) in insert-before
-             do (let ((node (form-named name "insert before")))
-                  (incf added (forms-in source))
-                  (push (list (node-start node) (node-start node) (format nil "~a~%~%" (printed source scratch)))
-                        operations)))
+       (progn
+        (loop for (name . source) in insert-before
+              do (let ((node (form-named name "insert before")))
+                   (incf added (forms-in source))
+                   (push (list (node-start node) (node-start node) (format nil "~a~%~%" (printed source scratch)))
+                         operations)))
+        (loop for (name . source) in insert-after
+              do (let ((node (form-named name "insert after")))
+                   (incf added (forms-in source))
+                   (let ((at (after-trailing-comment text (node-end node))))
+                     (push (list at at (format nil "~%~%~a" (printed source scratch))) operations)))))
        (loop for (name . source) in replace
              do (let ((node (form-named name "replace")))
                   (remove-form node name)
@@ -226,10 +276,22 @@
            0))))
 
 (defun indented (string column)
-  "STRING with COLUMN spaces after each of its newlines, so a form printed on its own lines fits where it is put."
+  "STRING with COLUMN spaces after each of its newlines that lies between tokens, so a form printed on its own lines
+   fits where it is put. A newline inside a string, a |symbol| or after # is part of what is written and is left as it is."
   (with-output-to-string (out)
-    (loop for char across string
-          do (write-char char out) (when (char= char #\Newline) (dotimes (i column) (write-char #\  out))))))
+    (let ((i 0) (n (length string)) (inside nil))
+      (loop while (< i n)
+            do (let ((char (char string i)))
+                 (cond
+                  ((and (null inside) (char= char #\#) (< (+ i 2) n) (char= (char string (1+ i)) #\\))
+                   (write-string string out :start i :end (+ i 3)) (incf i 3))
+                  ((and inside (char= char #\\) (< (1+ i) n)) (write-string string out :start i :end (+ i 2))
+                   (incf i 2))
+                  (t (write-char char out)
+                   (cond ((and (null inside) (member char '(#\" #\|))) (setf inside char))
+                         ((eql char inside) (setf inside nil))
+                         ((and (null inside) (char= char #\Newline)) (dotimes (k column) (write-char #\  out))))
+                   (incf i))))))))
 
 (defun subform-deletion (text start end)
   "The span to cut when deleting the subform at START..END: its whole line when it is alone on it; otherwise it and the
@@ -259,9 +321,14 @@
   (with-scratch-package (scratch)
    (let* ((text (file-text path))
           (nodes (read-nodes text scratch))
-          (tops (remove-if-not (lambda (node) (equal (form-name (node-expression node)) name)) nodes))
+          (tops (forms-matching nodes name scratch))
           (old-expression (node-expression (only-node old scratch "OLD")))
-          (new-expression (and new (node-expression (only-node new scratch "NEW")))))
+          (new-expression
+           (and new
+                (progn
+                 (when (nth-value 1 (read-nodes new scratch))
+                   (error "NEW contains a comment, which cannot be put inside a form: ~s" new))
+                 (node-expression (only-node new scratch "NEW"))))))
      (unless (= (length tops) 1) (error "~d top-level forms are named ~s in ~a; expected 1" (length tops) name path))
      (let* ((top (first tops)) (matches (sub-nodes top old-expression)))
        (unless (= (length matches) 1)
@@ -303,7 +370,7 @@
   "In the one top-level form of the file PATH that is named NAME, replace the one subform that reads as OLD with NEW. OLD
    and NEW are text. The text of every other form, and the comments inside the form, stay byte for byte. An error, and
    no write, when NAME is not exactly one form, when OLD is not exactly one subform of it, when either is a form that
-   #+ or #- governs, or when the new text does not read as the old form with that one substitution."
+   #+ or #- governs, or when the new text does not read as the old form with that one substitution. NAME may also be (:form TEXT), and NEW may not contain a comment."
   (unless (stringp new) (error "NEW must be text; use delete-subform to remove a subform"))
   (change-subform path name old new))
 

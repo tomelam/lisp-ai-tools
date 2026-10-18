@@ -297,6 +297,167 @@
          (check "and no stand-in package is left behind" (notany #'find-package '("NOPKG" "OTHER"))))
       (when (probe-file path) (delete-file path)))))
 
+(defparameter *anchor-sample*
+  "(in-package :cl-user)
+
+;; first
+(setf *x* 1)
+
+(handler-case (a) (error () nil))
+
+(setf *y* 2)
+")
+
+(defun run-anchors (directory)
+  "A form with no name is addressed as (:form TEXT): the one top-level form that reads as TEXT."
+  (let ((path (merge-pathnames "form-edit-test-anchors.lisp" directory)))
+    (unwind-protect
+        (progn
+         (write-text path *anchor-sample*)
+         (form-edit::edit path :replace '(((:form "(setf *x* 1)") . "(setf *x* 10)")))
+         (check "a form with no name is replaced, the comment above it kept"
+          (search ";; first
+(setf *x* 10)
+
+(handler-case"
+                  (text-of path)))
+         (write-text path *anchor-sample*)
+         (form-edit::edit path :delete '((:form "(handler-case (a) (error () nil))")))
+         (check-equal "a form with no name is deleted, no double gap left" (text-of path) "(in-package :cl-user)
+
+;; first
+(setf *x* 1)
+
+(setf *y* 2)
+")
+         (write-text path *anchor-sample*)
+         (form-edit::edit path :insert-before '(((:form "(setf *y* 2)") . "(setf *z* 3)")))
+         (check "a form is inserted before a form with no name"
+          (search "(error () nil))
+
+(setf *z* 3)
+
+(setf *y* 2)"
+                  (text-of path)))
+         (write-text path *anchor-sample*)
+         (form-edit::edit-subform path '(:form "(handler-case (a) (error () nil))") "(a)" "(b)")
+         (check "a subform is edited in a form with no name"
+          (search "(handler-case (b) (error () nil))" (text-of path)))
+         (write-text path (format nil "(setf *x* 1)~%(setf *x* 1)~%"))
+         (check "an anchor that matches twice: refused"
+          (refused-p (lambda () (form-edit::edit path :delete '((:form "(setf *x* 1)"))))))
+         (check "an anchor that matches nothing: refused"
+          (refused-p (lambda () (form-edit::edit path :delete '((:form "(setf *q* 9)"))))))
+         (check-equal "and the file is as it was" (text-of path) (format nil "(setf *x* 1)~%(setf *x* 1)~%")))
+      (when (probe-file path) (delete-file path)))))
+
+(defun run-comments (directory)
+  "Comments between the forms of new text are kept as typed; a comment inside a form is refused, never silently lost."
+  (let ((path (merge-pathnames "form-edit-test-comments.lisp" directory))
+        (sample (format nil "(defun a () 1)~%~%(defun b () 2)~%")))
+    (unwind-protect
+        (progn
+         (write-text path sample)
+         (form-edit::edit path :insert-before
+                          '(("B" . ";; about d
+(defun d () 4)"))
+                          :append "(defun e () 5) ; note")
+         (check-equal "a comment above a new form, and one after the last" (text-of path) "(defun a () 1)
+
+;; about d
+(defun d () 4)
+
+(defun b () 2)
+
+(defun e () 5)  ; note
+")
+         (write-text path sample)
+         (form-edit::edit path :replace
+                          '(("A" . ";; new a
+(defun a () 11) ; eleven")))
+         (check-equal "a replaced form brings its comments" (text-of path) ";; new a
+(defun a () 11)  ; eleven
+
+(defun b () 2)
+")
+         (write-text path sample)
+         (check "a comment inside a new form: refused, not lost"
+          (refused-p
+           (lambda ()
+             (form-edit::edit path :replace
+                              '(("A" . "(defun a ()
+  ;; inner
+  1)"))))))
+         (check "a comment in a new subform: refused"
+          (refused-p
+           (lambda ()
+             (form-edit::edit-subform path "A" "1" "(list 1 ; c
+ 2)"))))
+         (check "a comment before a new subform: refused"
+          (refused-p
+           (lambda ()
+             (form-edit::edit-subform path "A" "1" ";; lead
+2"))))
+         (check-equal "and after the refusals the file is as it was" (text-of path) sample))
+      (when (probe-file path) (delete-file path)))))
+
+(defun run-indentation (directory)
+  "A form printed over several lines is indented to where it is put, but a newline inside a string is left alone."
+  (let ((path (merge-pathnames "form-edit-test-indentation.lisp" directory)))
+    (unwind-protect
+        (progn
+         (check-equal "newlines between tokens get the column; newlines inside a string do not"
+          (form-edit::indented (format nil "(a \"x~%y\"~%b ~c~%c)" #\ ) 4)
+          (format nil "(a \"x~%y\"~%    b ~c~%    c)" #\ ))
+         (check-equal "a quote or a newline written as a character is not a string"
+          (form-edit::indented (format nil "(f #\\\" ~%g #\\~%~%h)") 2) (format nil "(f #\\\" ~%  g #\\~%~%  h)"))
+         (write-text path (format nil "(defun f ()~%  \"line one~%   line two\"~%  1)~%"))
+         (form-edit::edit-subform path "F" "\"line one
+   line two\""
+                                  "\"line one
+   line two, edited\"")
+         (check-equal "a docstring that spans lines can be edited, its second line as typed" (text-of path)
+          (format nil "(defun f ()~%  \"line one~%   line two, edited\"~%  1)~%")))
+      (when (probe-file path) (delete-file path)))))
+
+(defun run-insert-after (directory)
+  "edit :insert-after puts new text after a form, and after the comment that follows it on its line."
+  (let ((path (merge-pathnames "form-edit-test-insert-after.lisp" directory))
+        (sample
+         ";;; where a is
+(defun a () 1) ; about a
+
+;;; where b is
+(defun b () 2)
+"))
+    (unwind-protect
+        (progn
+         (write-text path sample)
+         (form-edit::edit path :insert-after
+                          '(("A" . ";; new, after a
+(defun c () 3)")))
+         (check-equal "text lands after the form and its trailing comment, and the next form keeps its own comment"
+          (text-of path) ";;; where a is
+(defun a () 1) ; about a
+
+;; new, after a
+(defun c () 3)
+
+;;; where b is
+(defun b () 2)
+")
+         (write-text path sample)
+         (form-edit::edit path :insert-after '(((:form "(defun b () 2)") . "(defun d () 4)")))
+         (check "text lands after the last form too"
+          (search "(defun b () 2)
+
+(defun d () 4)
+"
+                  (text-of path)))
+         (check "insert-after a form that is not there: refused"
+          (refused-p (lambda () (form-edit::edit path :insert-after '(("NO-SUCH" . "(x)")))))))
+      (when (probe-file path) (delete-file path)))))
+
 (defun run (directory)
   "Run every check of form-edit, with DIRECTORY (a pathname ending in a slash) for scratch files. Returns the number of
    failures."
@@ -308,5 +469,9 @@
     (run-atom directory)
     (run-delete directory)
     (run-delete-subform directory)
-    (run-foreign-packages directory))
+    (run-foreign-packages directory)
+    (run-anchors directory)
+    (run-comments directory)
+    (run-indentation directory)
+    (run-insert-after directory))
   *failures*)
