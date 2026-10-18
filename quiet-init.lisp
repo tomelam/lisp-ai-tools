@@ -13,7 +13,7 @@
 (in-package :quiet-init)
 
 (defparameter *library-package-prefixes* '("UIOP" "ASDF" "SLYNK" "ECLECTOR")
-  "A package is a library's when its name is one of these or begins with one followed by a slash.")
+  "A package is a library's when its name is one of these or begins with one followed by a slash, a hyphen or a dot.")
 
 (defun library-package-p (package)
   (and package
@@ -22,7 +22,7 @@
                  (and (>= (length name) (length prefix))
                       (string= prefix name :end2 (length prefix))
                       (or (= (length name) (length prefix)) (char= (char name (length prefix)) #\/)
-                          (char= (char name (length prefix)) #\-))))
+                          (member (char name (length prefix)) '(#\- #\.)))))
                *library-package-prefixes*))))
 
 (defun symbol-library-p (symbol)
