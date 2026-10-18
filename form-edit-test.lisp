@@ -163,6 +163,140 @@
                       (format nil "(defun f (x)~%  ;; keep (me)~%  (vector x 43 (quote y)))~%")))
       (when (probe-file path) (delete-file path)))))
 
+(defparameter *delete-sample*
+  ";;; header
+(in-package :cl-user)
+
+;; about a
+(defun a () 1)
+
+(defun b () 2)   ; trailing b
+
+;; about c
+(defun c () 3)
+")
+
+(defun run-delete (directory)
+  "edit :delete takes a form and the comment after it on its line; the comments above stay and no double gap is left."
+  (let ((path (merge-pathnames "form-edit-test-delete.lisp" directory)))
+    (unwind-protect
+        (progn
+         (write-text path *delete-sample*)
+         (form-edit::edit path :delete '("B"))
+         (let ((text (text-of path)))
+           (check "the form is gone" (not (search "defun b" text)))
+           (check "and the comment after it on its line" (not (search "trailing b" text)))
+           (check "the comment above the next form stays" (search ";; about c" text))
+           (check "forms around it are kept byte for byte"
+            (search ";; about a
+(defun a () 1)
+"
+                    text))
+           (check "no double blank line is left" (not (search (format nil "~%~%~%") text)))
+           (check-equal "the text is the sample without that form" text ";;; header
+(in-package :cl-user)
+
+;; about a
+(defun a () 1)
+
+;; about c
+(defun c () 3)
+"))
+         (write-text path *delete-sample*)
+         (form-edit::edit path :delete '("A") :replace '(("C" . "(defun c () 33)")) :insert-before
+                          '(("B" . "(defun d () 4)")))
+         (check-equal "delete, replace and insert together" (text-of path) ";;; header
+(in-package :cl-user)
+
+;; about a
+
+(defun d () 4)
+
+(defun b () 2)   ; trailing b
+
+;; about c
+(defun c () 33)
+")
+         (write-text path *delete-sample*)
+         (check "no form of that name: refused" (refused-p (lambda () (form-edit::edit path :delete '("NO-SUCH")))))
+         (check "a replace of no form: refused"
+          (refused-p (lambda () (form-edit::edit path :replace '(("NO-SUCH" . "(a)"))))))
+         (check "an insert before no form: refused"
+          (refused-p (lambda () (form-edit::edit path :insert-before '(("NO-SUCH" . "(a)"))))))
+         (check "a form both replaced and deleted: refused"
+          (refused-p (lambda () (form-edit::edit path :delete '("A") :replace '(("A" . "(b)"))))))
+         (write-text path (format nil "(defun a () 1)~%(defun a () 2)~%"))
+         (check "two forms of that name: refused" (refused-p (lambda () (form-edit::edit path :delete '("A")))))
+         (write-text path (format nil "#+sbcl (defun a () 1)~%(defun b () 2)~%"))
+         (check "a form under #+: refused" (refused-p (lambda () (form-edit::edit path :delete '("A")))))
+         (check-equal "and the file is as it was" (text-of path)
+          (format nil "#+sbcl (defun a () 1)~%(defun b () 2)~%")))
+      (when (probe-file path) (delete-file path)))))
+
+(defun run-delete-subform (directory)
+  "delete-subform cuts one subform out of a form; its line goes when it is alone on it, comments around it stay."
+  (let ((path (merge-pathnames "form-edit-test-delete-subform.lisp" directory)))
+    (unwind-protect
+        (progn
+         (write-text path "(defun f (x)
+  ;; keep me
+  (list x
+        1
+        2
+        ;; before three
+        3))
+
+(defun g () (h a b c))
+")
+         (form-edit::delete-subform path "F" "2")
+         (form-edit::delete-subform path "G" "b")
+         (check-equal "a subform alone on its line takes the line; one in a line takes its blanks" (text-of path)
+          "(defun f (x)
+  ;; keep me
+  (list x
+        1
+        ;; before three
+        3))
+
+(defun g () (h a c))
+")
+         (form-edit::delete-subform path "G" "a")
+         (check "the first argument after the operator goes, the rest stay"
+          (search "(defun g () (h c))" (text-of path)))
+         (check "the other form is untouched"
+          (search "(defun f (x)
+  ;; keep me"
+                  (text-of path)))
+         (check "a subform that is not there: refused"
+          (refused-p (lambda () (form-edit::delete-subform path "F" "(nothing)"))))
+         (check "a subform that is not unique: refused"
+          (refused-p (lambda () (form-edit::delete-subform path "F" "x")))))
+      (when (probe-file path) (delete-file path)))))
+
+(defun run-foreign-packages (directory)
+  "A file may name packages the image does not have; they are read as stand-ins that keep : and ::, and are gone after."
+  (let ((path (merge-pathnames "form-edit-test-foreign.lisp" directory)))
+    (unwind-protect
+        (progn
+         (write-text path "(defun f ()
+  ;; keep me
+  (nopkg:thing nopkg::hidden 1))
+")
+         (form-edit::edit-subform path "F" "1" "2")
+         (check-equal "a subform is replaced next to symbols of a package the image lacks" (text-of path) "(defun f ()
+  ;; keep me
+  (nopkg:thing nopkg::hidden 2))
+")
+         (form-edit::edit-subform path "F" "(nopkg:thing nopkg::hidden 2)"
+                                  "(other:call other::inner :key `(a ,b ,@c))")
+         (check "new text with foreign symbols and a backquote is printed with its colons"
+          (search "(other:call other::inner :key `(a ,b ,@c))" (text-of path)))
+         (form-edit::edit path :replace '(("F" . "(defun f () (nopkg:thing nopkg::hidden))")))
+         (check-equal "a form is replaced as a whole too" (text-of path) "(defun f () (nopkg:thing nopkg::hidden))
+")
+         (check "and no stand-in package is left behind" (notany #'find-package '("NOPKG" "OTHER"))))
+      (when (probe-file path) (delete-file path)))))
+
 (defun run (directory)
   "Run every check of form-edit, with DIRECTORY (a pathname ending in a slash) for scratch files. Returns the number of
    failures."
@@ -171,5 +305,8 @@
     (run-edit directory)
     (run-strings directory)
     (run-subform directory)
-    (run-atom directory))
+    (run-atom directory)
+    (run-delete directory)
+    (run-delete-subform directory)
+    (run-foreign-packages directory))
   *failures*)
