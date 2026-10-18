@@ -2,7 +2,7 @@
 ;;;; the span of a form named in REPLACE, insert forms before a named one, add forms at the end, and replace the header
 ;;;; comment. New forms are written by the printer (never by hand); everything else stays byte for byte, comments
 ;;;; included.
-(asdf/operate:load-system "eclector")
+(unless (find-package "ECLECTOR.PARSE-RESULT") (asdf/operate:load-system "eclector"))
 
 (defpackage :form-edit (:use :cl))
 (in-package :form-edit)
