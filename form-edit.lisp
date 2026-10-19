@@ -246,10 +246,55 @@
         (or (position #\Newline text :start next) (length text))
         end)))
 
+(defun file-package (nodes)
+  "The package that the first (in-package ...) among NODES names, as the image has it; CL-USER for a file with none. An
+   error when the image lacks the package."
+  (let* ((node
+          (find-if
+           (lambda (node)
+             (let ((x (node-expression node)))
+               (and (consp x) (symbolp (car x)) (string= (symbol-name (car x)) "IN-PACKAGE") (consp (cdr x)))))
+           nodes))
+         (name (and node (string (second (node-expression node))))))
+    (cond ((null name) (find-package "CL-USER")) ((find-package name))
+          (t
+           (error "The file is in package ~a, which this image lacks: define it first, or give the new code as text"
+                  name)))))
+
+(defun scratch-symbol-in (form)
+  "A symbol of a package named SCRATCH inside FORM, else NIL. Such a symbol would be written as scratch::name."
+  (cond ((symbolp form) (and form (symbol-package form) (string= (package-name (symbol-package form)) "SCRATCH") form))
+        ((consp form) (or (scratch-symbol-in (car form)) (scratch-symbol-in (cdr form))))))
+
+(defun source-text (source nodes)
+  "SOURCE as text. A string is text already and is returned as it is. Anything else is a form, printed as the printer lays
+   it out, in the package of the file whose top-level forms are NODES, so its symbols are written as that file would write
+   them. NIL stays NIL. A form with a symbol from the SCRATCH package is refused: it would be written as scratch::name."
+  (cond ((or (null source) (stringp source)) source)
+        (t
+         (let ((symbol (scratch-symbol-in source)))
+           (when symbol
+             (error "The form has the symbol ~s of the SCRATCH package; intern it in the file's package" symbol))
+           (let ((*package* (file-package nodes)))
+             (write-to-string source :pretty t :escape t :readably nil :circle nil :case :downcase :right-margin 120
+                              :pprint-dispatch *layout-table*))))))
+
+(defun path-source-text (source path)
+  "SOURCE as text, as source-text makes it, for a form to be written into the file PATH."
+  (if (or (null source) (stringp source))
+      source
+      (with-scratch-package (scratch) (source-text source (read-nodes (file-text path) scratch)))))
+
+(defun alist-source-text (alist nodes)
+  "ALIST, of (key . source) pairs, with each source made text by source-text."
+  (mapcar (lambda (pair) (cons (car pair) (source-text (cdr pair) nodes))) alist))
+
 (defun edit (path &key replace delete insert-before insert-after append header)
-  "Change the top-level forms of the file PATH. REPLACE, INSERT-BEFORE and INSERT-AFTER are alists of (key . source-text), DELETE is a list of keys, APPEND and HEADER are text. A key is a form's name (the symbol or string after its operator, in upper case) or, for a form with no name, (:form TEXT): the form that reads as TEXT. Every other byte stays as it was. New source text may carry comments between its forms, kept as typed; a comment inside a form is refused. Deleting a form takes the comment after it on its line with it, not the comments above it. An error, and no write, when a key is not exactly one form, when a form to replace or delete is governed by #+ or #-, or when the result does not read back as the other forms, unchanged and in order."
+  "Change the top-level forms of the file PATH. REPLACE, INSERT-BEFORE and INSERT-AFTER are alists of (key . source-text), DELETE is a list of keys, APPEND and HEADER are text. A key is a form's name (the symbol or string after its operator, in upper case) or, for a form with no name, (:form TEXT): the form that reads as TEXT. Every other byte stays as it was. New source text may carry comments between its forms, kept as typed; a comment inside a form is refused. Deleting a form takes the comment after it on its line with it, not the comments above it. An error, and no write, when a key is not exactly one form, when a form to replace or delete is governed by #+ or #-, or when the result does not read back as the other forms, unchanged and in order. A source, and the new code of a subform, may also be a form, not text: any value but a string is printed, in the package of the file's in-package, so it can be built in the image (a form with a symbol of the SCRATCH package is refused). Comments in the new code need text."
   (with-scratch-package (scratch)
-   (let* ((text (file-text path)) (nodes (read-nodes text scratch)) (operations 'nil) (removed 'nil) (added 0))
+   (let* ((text (file-text path)) (nodes (read-nodes text scratch)) (replace (alist-source-text replace nodes))
+          (insert-before (alist-source-text insert-before nodes)) (insert-after (alist-source-text insert-after nodes))
+          (append (source-text append nodes)) (operations 'nil) (removed 'nil) (added 0))
      (flet ((form-named (name what)
               (let ((found (forms-matching nodes name scratch)))
                 (unless (= (length found) 1)
@@ -428,11 +473,11 @@
   "In the one top-level form of the file PATH that is named NAME, replace the one subform that reads as OLD with NEW. OLD
    and NEW are text. The text of every other form, and the comments inside the form, stay byte for byte. An error, and
    no write, when NAME is not exactly one form, when OLD is not exactly one subform of it, when either is a form that
-   #+ or #- governs, or when the new text does not read as the old form with that one substitution. NAME may also be (:form TEXT), and NEW may not contain a comment."
-  (unless (stringp new) (error "NEW must be text; use delete-subform to remove a subform"))
-  (change-subform path name old new))
+   #+ or #- governs, or when the new text does not read as the old form with that one substitution. NAME may also be (:form TEXT), and NEW may not contain a comment. OLD and NEW may be forms too, as for edit."
+  (unless new (error "NEW is missing; use delete-subform to remove a subform"))
+  (change-subform path name (path-source-text old path) (path-source-text new path)))
 
 (defun delete-subform (path name old)
   "In the one top-level form of the file PATH that is named NAME, cut out the one subform that reads as OLD (text). Its
    whole line goes when it is alone on it. Refused, and nothing written, in the cases edit-subform refuses."
-  (change-subform path name old nil))
+  (change-subform path name (path-source-text old path) nil))

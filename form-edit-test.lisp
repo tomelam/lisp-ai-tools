@@ -501,9 +501,71 @@
 "))
       (when (probe-file path) (delete-file path)))))
 
+(defun run-form-sources (directory)
+  "edit and edit-subform take a form where they take text: it is printed in the package of the file. A symbol of the SCRATCH
+   package, or of a package the image lacks, is refused."
+  (let ((path (merge-pathnames "form-edit-test-forms.lisp" directory))
+        (home (make-package "FORM-EDIT-SAMPLE-HOME" :use '(:cl)))
+        (scratch (or (find-package "SCRATCH") (make-package "SCRATCH" :use '(:cl))))
+        (made-scratch (not (find-package "SCRATCH")))
+        (sample
+         ";; the package
+(in-package :form-edit-sample-home)
+;; keep me
+(defun f () 0)
+(defun g (x) (list x 1))
+"))
+    (unwind-protect
+        (flet ((in-home (text)
+                 (let ((*package* home))
+                   (read-from-string text))))
+          (write-text path sample)
+          (form-edit::edit path :replace
+                           (list
+                            (cons "F"
+                                  (in-home
+                                   "(defun f (l) \"Doc.\" (cl-user::h (loop for x in l when (plusp x) collect x finally (return 1))))"))))
+          (check-equal "a form is written in the file's package: its own symbols plain, another package's qualified"
+           (text-of path) ";; the package
+(in-package :form-edit-sample-home)
+;; keep me
+(defun f (l)
+  \"Doc.\"
+  (common-lisp-user::h
+   (loop for x in l
+         when (plusp x) collect x
+         finally (return 1))))
+(defun g (x) (list x 1))
+")
+          (write-text path sample)
+          (form-edit::edit-subform path "G" (in-home "(list x 1)") (in-home "(list x 2)"))
+          (check-equal "edit-subform with forms" (text-of path) ";; the package
+(in-package :form-edit-sample-home)
+;; keep me
+(defun f () 0)
+(defun g (x) (list x 2))
+")
+          (write-text path sample)
+          (check "a symbol of the SCRATCH package is refused"
+           (refused-p
+            (lambda ()
+              (form-edit::edit path :replace
+                               (list (cons "F" (list 'defun (intern "F" home) nil (intern "S" scratch))))))))
+          (check-equal "and the refusal wrote nothing" (text-of path) sample)
+          (write-text path ";; no such package
+(in-package :form-edit-package-nobody-has)
+(defun f () 0)
+")
+          (check "a form for a file in a package the image lacks is refused"
+           (refused-p (lambda () (form-edit::edit path :replace (list (cons "F" (list 'defun 'f nil 1)))))))
+          (check "while text for it is still fine"
+           (not (refused-p (lambda () (form-edit::edit path :replace '(("F" . "(defun f () 1)"))))))))
+      (when (probe-file path) (delete-file path))
+      (delete-package home)
+      (when made-scratch (delete-package scratch)))))
+
 (defun run (directory)
-  "Run every check of form-edit, with DIRECTORY (a pathname ending in a slash) for scratch files. Returns the number of
-   failures."
+  "Run every check of form-edit, with DIRECTORY (a pathname ending in a slash) for scratch files. Returns the number of failures."
   (setf *failures* 0)
   (let ((directory (pathname directory)))
     (run-edit directory)
@@ -517,5 +579,6 @@
     (run-comments directory)
     (run-indentation directory)
     (run-insert-after directory)
-    (run-loop-layout directory))
+    (run-loop-layout directory)
+    (run-form-sources directory))
   *failures*)
