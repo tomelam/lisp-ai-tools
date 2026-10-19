@@ -121,6 +121,64 @@
         (remove-if-not (lambda (node) (same-form-p (node-expression node) expression)) nodes))
       (remove-if-not (lambda (node) (equal (form-name (node-expression node)) key)) nodes)))
 
+(defparameter *loop-clause-starters*
+  '("WITH" "FOR" "AS" "REPEAT" "WHILE" "UNTIL" "ALWAYS" "NEVER" "THEREIS" "WHEN" "IF" "UNLESS" "INITIALLY" "FINALLY"
+    "NAMED")
+  "The words that begin a clause of an extended LOOP, on a line of their own.")
+
+(defparameter *loop-actions*
+  '("DO" "DOING" "COLLECT" "COLLECTING" "APPEND" "APPENDING" "NCONC" "NCONCING" "SUM" "SUMMING" "COUNT" "COUNTING"
+    "MAXIMIZE" "MAXIMIZING" "MINIMIZE" "MINIMIZING" "RETURN")
+  "The words that begin an action. After WHEN, IF or UNLESS an action stays on the line of its condition.")
+
+(defun loop-word-p (item words) (and item (symbolp item) (member (symbol-name item) words :test #'string=) t))
+
+(defun extended-loop-p (form)
+  "True when FORM is (LOOP symbol ...): a LOOP with keywords, not a plain one that repeats its forms."
+  (and (consp form) (consp (cdr form)) (cadr form) (symbolp (cadr form)) (null (cdr (last form)))))
+
+(defun loop-clauses (items)
+  "ITEMS, the part of an extended LOOP after the word LOOP, as a list of clauses, each a list. A symbol that follows a word
+   taking an argument (FOR, COLLECT, WHEN, INTO ...) is that argument, even when it is spelled like a loop word."
+  (let ((clauses 'nil) (clause 'nil) (keyword nil) (conditional nil))
+    (dolist (item items)
+      (let* ((word
+              (and item (symbolp item) (not (loop-word-p keyword *loop-clause-starters*))
+                   (not (loop-word-p keyword *loop-actions*)) (not (loop-word-p keyword '("INTO")))))
+             (action (and word (loop-word-p item *loop-actions*)))
+             (starts
+              (and word
+                   (or (loop-word-p item *loop-clause-starters*)
+                       (and action (not conditional) (not (loop-word-p keyword '("AND" "ELSE"))))))))
+        (when (and starts clause) (push (nreverse clause) clauses) (setf clause 'nil))
+        (cond ((and word (loop-word-p item '("WHEN" "IF" "UNLESS"))) (setf conditional t))
+              (action (setf conditional nil)))
+        (push item clause)
+        (setf keyword (and word item))))
+    (when clause (push (nreverse clause) clauses))
+    (nreverse clauses)))
+
+(defun print-loop (stream form)
+  "Print an extended LOOP with each clause on its own line, under the first one."
+  (pprint-logical-block (stream nil :prefix "(" :suffix ")")
+    (write-string "loop " stream)
+    (pprint-indent :current 0 stream)
+    (loop for (clause . more) on (loop-clauses (rest form))
+          do (pprint-logical-block (stream nil)
+               (pprint-indent :block 2 stream)
+               (loop for (item . rest) on clause
+                     do (write item :stream stream) (when rest
+                                                      (write-char #\  stream)
+                                                      (pprint-newline :fill stream)))) (when more
+                                                                                         (pprint-newline :mandatory
+                                                                                                         stream)))))
+
+(defparameter *layout-table*
+  (let ((table (copy-pprint-dispatch nil)))
+    (set-pprint-dispatch '(and (cons (eql loop)) (satisfies extended-loop-p)) #'print-loop 1 table)
+    table)
+  "The printer's dispatch table for the forms form-edit writes: the standard one, with its own layout for LOOP.")
+
 (defun printed (source scratch)
   "SOURCE, text of one or more forms and the comments between them, printed by the printer: the forms are laid out by the
    printer and separated by blank lines, the comments are kept as typed (one after a form on its line stays there). A
@@ -147,7 +205,7 @@
                 (dolist (comment trailing) (format out "  ~a" (comment-text comment)))
                 (unless first (format out "~%~%"))
                 (dolist (comment leading) (format out "~a~%" (comment-text comment)))
-                (write (node-expression node) :stream out :pretty t :case :downcase :right-margin 120)
+                (write (node-expression node) :stream out :pretty t :case :downcase :right-margin 120 :pprint-dispatch *layout-table*)
                 (setf position (node-end node)
                       previous-end (node-end node)
                       first nil)))
