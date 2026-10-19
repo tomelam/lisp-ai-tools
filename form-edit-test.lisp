@@ -458,6 +458,49 @@
           (refused-p (lambda () (form-edit::edit path :insert-after '(("NO-SUCH" . "(x)")))))))
       (when (probe-file path) (delete-file path)))))
 
+(defun run-loop-layout (directory)
+  "An extended LOOP is written with one clause per line, an action staying on its condition's line; a plain LOOP and a loop
+   the edit does not touch are as they were."
+  (let ((path (merge-pathnames "form-edit-test-loop.lisp" directory))
+        (sample
+         "(defun keep () (loop for x in l do (f x) finally (return 1)))
+(defun f () 0)
+"))
+    (unwind-protect
+        (progn
+         (write-text path sample)
+         (form-edit::edit path :replace
+                          '(("F"
+                             . "(defun f (l) (loop with total = 0 for x in l when (plusp x) collect x into plus and sum x into total else do (g x) finally (return (values plus total))))")))
+         (check-equal "an edited loop: a clause to a line, a conditional's actions on its line" (text-of path)
+          "(defun keep () (loop for x in l do (f x) finally (return 1)))
+(defun f (l)
+  (loop with total = 0
+        for x in l
+        when (plusp x) collect x into plus and sum x into total else do (g x)
+        finally (return (values plus total))))
+")
+         (write-text path sample)
+         (form-edit::edit path :replace
+                          '(("F"
+                             . "(defun f (l) (loop for count from 0 below 3 when (oddp count) collect count into count-list finally do (print count)))")))
+         (check-equal "a variable spelled like a loop word is not taken for one" (text-of path)
+          "(defun keep () (loop for x in l do (f x) finally (return 1)))
+(defun f (l)
+  (loop for count from 0 below 3
+        when (oddp count) collect count into count-list
+        finally do (print count)))
+")
+         (write-text path sample)
+         (form-edit::edit path :replace '(("F" . "(defun f () (loop (print 1) (print 2)))")))
+         (check-equal "a plain loop is printed as before" (text-of path)
+          "(defun keep () (loop for x in l do (f x) finally (return 1)))
+(defun f ()
+  (loop (print 1)
+        (print 2)))
+"))
+      (when (probe-file path) (delete-file path)))))
+
 (defun run (directory)
   "Run every check of form-edit, with DIRECTORY (a pathname ending in a slash) for scratch files. Returns the number of
    failures."
@@ -473,5 +516,6 @@
     (run-anchors directory)
     (run-comments directory)
     (run-indentation directory)
-    (run-insert-after directory))
+    (run-insert-after directory)
+    (run-loop-layout directory))
   *failures*)
