@@ -7,10 +7,6 @@
   (:use :cl)
   (:export #:run))
 
-(defvar cl-user::*form-edit-tests-here* (directory-namestring *load-truename*))
-
-(load (merge-pathnames "form-edit.lisp" cl-user::*form-edit-tests-here*))
-
 (in-package :form-edit-tests)
 
 (defvar *failures* 0)
