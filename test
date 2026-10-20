@@ -1,0 +1,17 @@
+#!/bin/sh
+# tools/test PROJECT-DIR -- the arbiter: load the project's tests through Qlot's pinned dist and run ASDF test-op on the
+# system <name>/tests. Every project's bin/test is a wrapper that passes its directory here; the project's name is the
+# name of that directory.
+# The loader's redefinition warnings go to run/test.stderr; a load or test error is printed here, on stdout.
+# The compiler's own progress lines are off, so stdout holds only what needs reading.
+# --userinit mutes redefinition warnings about libraries only (UIOP, ASDF, Slynk, Eclector): tools/quiet-init.lisp.
+here=$1
+name=$(basename "$here")
+tools=$(cd "$(dirname "$0")" && pwd)
+[ -f "$tools/quiet-init.lisp" ] || { echo "tools/test: $tools/quiet-init.lisp is missing" >&2; exit 1; }
+cd "$here" && mkdir -p run && exec bin/qlot exec sbcl --noinform --userinit "$tools/quiet-init.lisp" --non-interactive \
+  --eval "(asdf:load-asd (truename \"$name.asd\"))" \
+  --eval "(let ((*compile-verbose* nil) (*compile-print* nil) (*load-verbose* nil))
+            (handler-case (progn (asdf:load-system \"$name\" :force t) (asdf:test-system \"$name/tests\"))
+              (error (e) (format t \"TEST RUN FAILED: ~a~%\" e) (uiop:quit 2))))" \
+  2>run/test.stderr
