@@ -288,12 +288,78 @@
   "ALIST, of (key . source) pairs, with each source made text by source-text."
   (mapcar (lambda (pair) (cons (car pair) (source-text (cdr pair) nodes))) alist))
 
+(defvar *register-locations*
+  t
+  "When true, an edit that writes a function-defining top-level form also tells the image where the file keeps it, so that M-. finds it. Bind it to NIL to turn that off.")
+
+(defparameter *definition-heads*
+  '("DEFUN" "DEFMACRO" "DEFGENERIC" "DEFMETHOD")
+  "The operators of the top-level forms whose source location is registered after an edit.")
+
+(defun changed-nodes (untouched nodes)
+  "The members of NODES, the top-level nodes of the text just written, that are not one of the UNTOUCHED expressions (taken in order, as edit checks them): the forms the edit wrote."
+  (let ((remaining nodes) (matched 'nil))
+    (dolist (expression untouched)
+      (let ((tail (member expression remaining :key #'node-expression :test #'same-form-p)))
+        (when tail (push (first tail) matched) (setf remaining (cdr tail)))))
+    (remove-if (lambda (node) (member node matched)) nodes)))
+
+(defun real-name (name scratch package)
+  "NAME, a symbol or (setf symbol) read in SCRATCH, as the symbol of PACKAGE it stands for."
+  (cond ((and (symbolp name) name (eq (symbol-package name) scratch)) (intern (symbol-name name) package))
+        ((and (consp name) (consp (cdr name))) (list (first name) (real-name (second name) scratch package))) (t name)))
+
+(defun register-locations (path text nodes changed scratch)
+  "Tell the image where the file PATH keeps the definitions among the CHANGED nodes. TEXT is the whole file just written and NODES are its top-level nodes. Each defun, defmacro, defgeneric and defmethod that the image already has is compiled again from its text in the file, with the file name and the position, as Sly's C-c C-c does; then the image knows the file's copy and M-. finds it. A definition the image does not have is not defined: it is reported as skipped. Returns a plist: :registered (names), :skipped ((name reason) ...), :failed ((name compiler output) ...), and :note when nothing could be tried."
+  (let ((compile
+         (let ((package (find-package "SLYNK-BACKEND")))
+           (and package
+                (let ((symbol (find-symbol "SLYNK-COMPILE-STRING" package)))
+                  (and symbol (fboundp symbol) symbol)))))
+        (package (ignore-errors (file-package nodes))))
+    (cond ((not *register-locations*) (list :registered 'nil :note "turned off by *register-locations*"))
+          ((null compile)
+           (list :registered 'nil :note
+                 "Slynk is not loaded in this image, so it does not learn where the file keeps its definitions"))
+          ((null package) (list :registered 'nil :note "the package of the file is not in this image"))
+          (t
+           (let ((registered 'nil) (skipped 'nil) (failed 'nil))
+             (dolist (node changed)
+               (let ((form (node-expression node)))
+                 (when
+                     (and (consp form) (symbolp (car form)) (consp (cdr form))
+                          (member (symbol-name (car form)) *definition-heads* :test #'string=))
+                   (let ((name (real-name (second form) scratch package)))
+                     (if (not (fboundp name))
+                         (push (list name "not defined in the image") skipped)
+                         (let ((output (make-string-output-stream)) (ok nil))
+                           (let ((*package* package)
+                                 (*standard-output* output)
+                                 (*error-output* output)
+                                 (*compile-verbose* nil)
+                                 (*compile-print* nil))
+                             (handler-bind ((sb-kernel:redefinition-warning #'muffle-warning))
+                               (setf ok
+                                       (funcall compile (subseq text (node-start node) (node-end node)) :buffer
+                                                (file-namestring path) :position (node-start node) :filename
+                                                (namestring (truename path))))))
+                           (if ok
+                               (push name registered)
+                               (push (list name (get-output-stream-string output)) failed))))))))
+             (list :registered (nreverse registered) :skipped (nreverse skipped) :failed (nreverse failed)))))))
+
 (defun edit (path &key replace delete insert-before insert-after append header)
-  "Change the top-level forms of the file PATH. REPLACE, INSERT-BEFORE and INSERT-AFTER are alists of (key . source-text), DELETE is a list of keys, APPEND and HEADER are text. A key is a form's name (the symbol or string after its operator, in upper case) or, for a form with no name, (:form TEXT): the form that reads as TEXT. Every other byte stays as it was. New source text may carry comments between its forms, kept as typed; a comment inside a form is refused. Deleting a form takes the comment after it on its line with it, not the comments above it. An error, and no write, when a key is not exactly one form, when a form to replace or delete is governed by #+ or #-, or when the result does not read back as the other forms, unchanged and in order. A source, and the new code of a subform, may also be a form, not text: any value but a string is printed, in the package of the file's in-package, so it can be built in the image (a form with a symbol of the SCRATCH package is refused). Comments in the new code need text."
+  "Change the top-level forms of the file PATH. REPLACE, INSERT-BEFORE and INSERT-AFTER are alists of (key . source-text), DELETE is a list of keys, APPEND and HEADER are text. A key is a form's name (the symbol or string after its operator, in upper case) or, for a form with no name, (:form TEXT): the form that reads as TEXT. Every other byte stays as it was. New source text may carry comments between its forms, kept as typed; a comment inside a form is refused. Deleting a form takes the comment after it on its line with it, not the comments above it. An error, and no write, when a key is not exactly one form, when a form to replace or delete is governed by #+ or #-, or when the result does not read back as the other forms, unchanged and in order. A source, and the new code of a subform, may also be a form, not text: any value but a string is printed, in the package of the file's in-package, so it can be built in the image (a form with a symbol of the SCRATCH package is refused). Comments in the new code need text. Returns PATH and, as a second value, what REGISTER-LOCATIONS did: the written definitions that the image already has are given their place in the file, so that M-. finds them."
   (with-scratch-package (scratch)
-   (let* ((text (file-text path)) (nodes (read-nodes text scratch)) (replace (alist-source-text replace nodes))
-          (insert-before (alist-source-text insert-before nodes)) (insert-after (alist-source-text insert-after nodes))
-          (append (source-text append nodes)) (operations 'nil) (removed 'nil) (added 0))
+   (let* ((text (file-text path))
+          (nodes (read-nodes text scratch))
+          (replace (alist-source-text replace nodes))
+          (insert-before (alist-source-text insert-before nodes))
+          (insert-after (alist-source-text insert-after nodes))
+          (append (source-text append nodes))
+          (operations 'nil)
+          (removed 'nil)
+          (added 0))
      (flet ((form-named (name what)
               (let ((found (forms-matching nodes name scratch)))
                 (unless (= (length found) 1)
@@ -316,20 +382,23 @@
           operations))
        (progn
         (loop for (name . source) in insert-before
-              do (let ((node (form-named name "insert before")))
-                   (incf added (forms-in source))
-                   (push (list (node-start node) (node-start node) (format nil "~a~%~%" (printed source scratch)))
-                         operations)))
-        (loop for (name . source) in insert-after
-              do (let ((node (form-named name "insert after")))
-                   (incf added (forms-in source))
-                   (let ((at (after-trailing-comment text (node-end node))))
-                     (push (list at at (format nil "~%~%~a" (printed source scratch))) operations)))))
-       (loop for (name . source) in replace
-             do (let ((node (form-named name "replace")))
-                  (remove-form node name)
+              do
+                (let ((node (form-named name "insert before")))
                   (incf added (forms-in source))
-                  (push (list (node-start node) (node-end node) (printed source scratch)) operations)))
+                  (push (list (node-start node) (node-start node) (format nil "~a~%~%" (printed source scratch)))
+                        operations)))
+        (loop for (name . source) in insert-after
+              do
+                (let ((node (form-named name "insert after")))
+                  (incf added (forms-in source))
+                  (let ((at (after-trailing-comment text (node-end node))))
+                    (push (list at at (format nil "~%~%~a" (printed source scratch))) operations)))))
+       (loop for (name . source) in replace
+             do
+               (let ((node (form-named name "replace")))
+                 (remove-form node name)
+                 (incf added (forms-in source))
+                 (push (list (node-start node) (node-end node) (printed source scratch)) operations)))
        (dolist (name delete)
          (let ((node (form-named name "delete")))
            (remove-form node name)
@@ -346,11 +415,11 @@
          (write-string text out :start position)
          (when append (incf added (forms-in append)) (format out "~%~a~%" (printed append scratch)))
          (let* ((result (get-output-stream-string out))
-                (after (mapcar #'node-expression (read-nodes result scratch)))
+                (result-nodes (read-nodes result scratch))
+                (after (mapcar #'node-expression result-nodes))
                 (untouched
                  (loop for node in nodes
-                       unless (member node removed)
-                       collect (node-expression node))))
+                       unless (member node removed) collect (node-expression node))))
            (unless (= (length after) (+ (length untouched) added))
              (error "The edit would leave ~d forms, not the ~d meant: nothing written" (length after)
                     (+ (length untouched) added)))
@@ -359,7 +428,8 @@
                (unless tail (error "The edit would change a form it was not asked to: nothing written"))
                (setf after (cdr tail))))
            (write-file path result)
-           path))))))
+           (values path
+                   (register-locations path result result-nodes (changed-nodes untouched result-nodes) scratch))))))))
 
 (defun new-file (path header source)
   "Write a file made of HEADER (comment text) and the forms of SOURCE, printed."
@@ -419,7 +489,8 @@
 
 (defun change-subform (path name old new)
   "The work of edit-subform and delete-subform: put the text NEW in place of the subform OLD of the form NAME in the
-   file PATH, or, when NEW is NIL, cut that subform out."
+   file PATH, or, when NEW is NIL, cut that subform out. Returns PATH and, as a second value, what REGISTER-LOCATIONS did
+   for the changed top-level form."
   (with-scratch-package (scratch)
    (let* ((text (file-text path))
           (nodes (read-nodes text scratch))
@@ -460,13 +531,14 @@
                       (length after)))
              (loop for before in nodes
                    for now in after
-                   do (unless
-                          (if (eq before top)
-                              (same-form-p (node-expression now) expected)
-                              (same-form-p (node-expression now) (node-expression before)))
-                        (error "The edit would not read back as the one change meant: nothing written")))
+                   do
+                     (unless
+                         (if (eq before top)
+                             (same-form-p (node-expression now) expected)
+                             (same-form-p (node-expression now) (node-expression before)))
+                       (error "The edit would not read back as the one change meant: nothing written")))
              (write-file path result)
-             path)))))))
+             (values path (register-locations path result after (list (nth (position top nodes) after)) scratch)))))))))
 
 (defun edit-subform (path name old new)
   "In the one top-level form of the file PATH that is named NAME, replace the one subform that reads as OLD with NEW. OLD

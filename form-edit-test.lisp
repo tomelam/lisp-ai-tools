@@ -560,6 +560,94 @@
       (delete-package home)
       (when made-scratch (delete-package scratch)))))
 
+(defun in-cl-user (text)
+  "The form TEXT reads as, read in CL-USER."
+  (let ((*package* (find-package :cl-user)))
+    (read-from-string text)))
+
+(defun recorded-file (symbol)
+  "The file the image records for the function SYMBOL, or NIL."
+  (let ((source (first (sb-introspect:find-definition-sources-by-name symbol :function))))
+    (and source (sb-introspect:definition-source-pathname source))))
+
+(defun recorded-offset (symbol)
+  "The character offset M-. would be told for the function SYMBOL, or NIL."
+  (let* ((location (second (first (slynk-backend:find-definitions symbol))))
+         (offset (and (consp location) (find :offset (cdr location) :key (lambda (x) (and (consp x) (car x)))))))
+    (and offset (second offset))))
+
+(defun run-locations (directory)
+  "After an edit the image knows where the file keeps a definition it already has, so M-. finds it. The definitions
+   are first made in the image from forms, as a request through bin/eval makes them, so they have no file. A definition
+   the image does not have is not defined by the edit; a variable is not evaluated again; the switch turns it all off."
+  (require :sb-introspect)
+  (unless (find-package "SLYNK-BACKEND")
+    (incf *failures*)
+    (format t "FAIL: Slynk is not loaded, so the location checks did not run~%")
+    (return-from run-locations))
+  (let* ((path (merge-pathnames "form-edit-test-locations.lisp" directory))
+         (a (intern "LOCATION-TEST-A" :cl-user))
+         (b (intern "LOCATION-TEST-B" :cl-user))
+         (c (intern "LOCATION-TEST-C" :cl-user))
+         (new (intern "LOCATION-TEST-NEW" :cl-user))
+         (p (intern "*LOCATION-TEST-P*" :cl-user)))
+    (unwind-protect
+        (progn
+         (write-text path "(in-package :cl-user)
+
+(defun location-test-a () 1)
+
+(defun location-test-b () 2)
+
+(defun location-test-c (x)
+  (list x 1))
+
+(defparameter *location-test-p* 1)
+")
+         (dolist
+             (text
+              '("(defun location-test-a () 1)" "(defun location-test-b () 2)" "(defun location-test-c (x) (list x 1))"
+                "(defparameter *location-test-p* 1)"))
+           (eval (in-cl-user text)))
+         (check "before an edit the image records no file for the definition" (null (recorded-file b)))
+         (multiple-value-bind (written report)
+             (form-edit::edit path :replace '(("LOCATION-TEST-B" . "(defun location-test-b () 3)")))
+           (check-equal "edit returns the path" written path)
+           (check-equal "the replaced definition is reported registered" (getf report :registered) (list b)))
+         (check-equal "the image records the file" (and (recorded-file b) (namestring (recorded-file b)))
+          (namestring (truename path)))
+         (check-equal "and the character offset M-. is told is where the form starts in the file" (recorded-offset b)
+          (search "(defun location-test-b" (text-of path)))
+         (check-equal "the image has the new text of the definition too" (funcall b) 3)
+         (check "a definition the edit did not write is left alone" (null (recorded-file a)))
+         (multiple-value-bind (written report)
+             (form-edit::edit-subform path "LOCATION-TEST-C" "(list x 1)" "(list x 2)")
+           (declare (ignore written))
+           (check-equal "edit-subform reports the changed form registered" (getf report :registered) (list c)))
+         (check-equal "and it knows the new place after the file changed size" (recorded-offset c)
+          (search "(defun location-test-c" (text-of path)))
+         (let ((report (nth-value 1 (form-edit::edit path :append "(defun location-test-new () 9)"))))
+           (check-equal "a new definition is skipped, with the reason" (getf report :skipped)
+            (list (list new "not defined in the image")))
+           (check "and it is not defined in the image" (not (fboundp new))))
+         (setf (symbol-value p) 42)
+         (let ((report
+                (nth-value 1
+                           (form-edit::edit path :replace
+                                            '(("*LOCATION-TEST-P*" . "(defparameter *location-test-p* 2)"))))))
+           (check-equal "a defparameter is not registered" (getf report :registered) 'nil))
+         (check-equal "and its value is not reset" (symbol-value p) 42)
+         (let ((report
+                (let ((form-edit::*register-locations* nil))
+                  (nth-value 1
+                             (form-edit::edit path :replace '(("LOCATION-TEST-A" . "(defun location-test-a () 1)")))))))
+           (check-equal "turned off, nothing is registered" (getf report :registered) 'nil)
+           (check "and the report says why" (stringp (getf report :note)))
+           (check "so the definition still has no file" (null (recorded-file a)))))
+      (when (probe-file path) (delete-file path))
+      (dolist (symbol (list a b c new)) (when (fboundp symbol) (fmakunbound symbol)))
+      (when (boundp p) (makunbound p)))))
+
 (defun run (directory)
   "Run every check of form-edit, with DIRECTORY (a pathname ending in a slash) for scratch files. Returns the number of failures."
   (setf *failures* 0)
@@ -576,5 +664,6 @@
     (run-indentation directory)
     (run-insert-after directory)
     (run-loop-layout directory)
-    (run-form-sources directory))
+    (run-form-sources directory)
+    (run-locations directory))
   *failures*)
