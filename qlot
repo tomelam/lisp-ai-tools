@@ -1,6 +1,0 @@
-#!/bin/sh
-# tools/qlot ARGS... -- run Qlot with cl+ssl pinned to Homebrew's openssl@3; why: tools/qlot-setup.lisp.
-# Every project's bin/qlot is a wrapper that runs this. Qlot reads the qlfile of the directory it is run in, so run it
-# from the project (bin/qlot install) or let tools/lisp-server and tools/test do it.
-here=$(cd "$(dirname "$0")" && pwd)
-QLOT_SETUP_FILE="$here/qlot-setup.lisp" exec "$HOME/.qlot/bin/qlot" "$@"
