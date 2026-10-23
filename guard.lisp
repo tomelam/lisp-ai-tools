@@ -1,22 +1,33 @@
-;;;; The guard: which text-processing programs does a shell command run, and the permission rules that deny them.
-;;;; Pure functions over strings, except FORBIDDEN-PROGRAMS and SYNC-DENY-RULES, which read and write a project's files.
-;;;; It knows nothing of the profiler: tools/hook.lisp puts the two together. tools/guard is the only place that touches
-;;;; stdin and exit codes.
+;;;; The gate: what a Claude Code tool call does to Lisp. One PreToolUse hook, for Bash and for the Edit, MultiEdit and
+;;;; Write tools (bin/lisp guard). Lisp is changed in the image and saved from it (lisp-ai-bench), so the gate refuses
+;;;; every other way of changing a Lisp file: Edit and MultiEdit of one, Write over one that exists, a shell command that
+;;;; writes one (a redirection, tee, cp, mv, install, ln, rsync, dd), and a text-processing program (rules/
+;;;; forbidden-programs.sexp) used on Lisp (a file with a Lisp suffix, or a path through a Lisp directory:
+;;;; rules/lisp-files.sexp). Everything else is allowed: wc on a log, jq on JSON, grep on markdown. Each denial is one
+;;;; line in the project's run/gate.log; nothing else is recorded and there are no switches.
+;;;; Pure functions over strings, except FORBIDDEN-PROGRAMS and LISP-FILES (a project's rules), FILE-EDIT-REFUSAL (does a
+;;;; file exist) and LOG-DENIAL. The script lisp (word guard) is the only place that touches stdin and exit codes.
 (defpackage :lisp-ai-guard
   (:use :cl)
   (:export #:forbidden-uses
            #:command-programs
+           #:lisp-names
+           #:written-lisp-files
+           #:file-edit-refusal
            #:hook-verdict
-           #:hook-bash-call
-           #:refusal-message
+           #:hook-response
+           #:respond
            #:deny-json
            #:forbidden-programs
-           #:permission-rules
-           #:settings-with-deny
-           #:sync-deny-rules
-           #:*program-directories*))
+           #:lisp-files
+           #:hook-payload-p
+           #:socket-reply
+           #:socket-marker
+           #:*gate-log*))
 
 (in-package :lisp-ai-guard)
+
+;;; Which programs a shell command runs
 
 (defparameter *wrappers* '("sudo" "env" "time" "nohup" "command" "exec" "nice" "builtin")
   "Programs that only run another program, named by the words after them.")
@@ -197,18 +208,156 @@
    (loop for inner in (double-quoted-substitutions command)
          append (command-programs inner))))
 
-(defun segment-program (words) "The program a simple command runs: the first value of UNWRAP." (values (unwrap words)))
-
 (defun forbidden-uses (command forbidden)
   "The programs of COMMAND (a shell command string) that are in the list FORBIDDEN, in order of appearance."
   (remove-if-not (lambda (program) (member program forbidden :test #'string=)) (command-programs command)))
 
-(defun refusal-message (uses forbidden)
+;;; What counts as Lisp, and whether a command names or writes it
+
+(defun lisp-files (project)
+  "What counts as Lisp for the gate: the one form in rules/lisp-files.sexp of PROJECT, a plist
+   (:code-suffixes (\"lisp\" \"asd\") :data-suffixes (\"sexp\") :directories (\"src\" \"tests\" \"tools\")). Code is what
+   no tool but the workbench may change; code and data are what a text-processing program may not read or change. A
+   missing file is an error, never an empty rule."
+  (lisp-ai-project:read-rules project "lisp-files"))
+
+(defun command-tokens (command)
+  "The words of COMMAND, a shell command string, split at blanks, quotes and shell punctuation, here-document bodies left
+   out. Scripts given to sh -c, and file names after a redirection, come out as words too."
+  (remove ""
+          (uiop:split-string (strip-heredoc-bodies command)
+                             :separator '(#\Space #\Tab #\Newline #\; #\| #\& #\( #\) #\< #\> #\` #\' #\" #\=))
+          :test #'string=))
+
+(defun path-type (path)
+  "The suffix after the last dot of the last component of PATH, or NIL when there is none or the name only starts with a dot."
+  (let* ((name (subseq path (1+ (or (position #\/ path :from-end t) -1)))) (dot (position #\. name :from-end t)))
+    (and dot (plusp dot) (subseq name (1+ dot)))))
+
+(defun code-file-p (token lisp-files)
+  "True when TOKEN names a file with a code suffix of LISP-FILES (a .lisp or .asd)."
+  (and (member (path-type token) (getf lisp-files :code-suffixes) :test #'equal) t))
+
+(defun path-components (token)
+  (remove "" (uiop:split-string token :separator "/") :test #'string=))
+
+(defun in-lisp-directory-p (token lisp-files)
+  (and (intersection (path-components token) (getf lisp-files :directories) :test #'string=) t))
+
+(defun token-names-lisp-p (token lisp-files)
+  "True when TOKEN, a word of a command, names Lisp: a file with a code or data suffix of LISP-FILES, or a path with one
+   of its directories as a component."
+  (let ((type (path-type token)))
+    (or (and type
+             (member type (append (getf lisp-files :code-suffixes) (getf lisp-files :data-suffixes)) :test #'string=)
+             t)
+        (in-lisp-directory-p token lisp-files))))
+
+(defun lisp-names (command lisp-files)
+  "The words of COMMAND that name Lisp (token-names-lisp-p), in order, each once."
+  (remove-duplicates (remove-if-not (lambda (token) (token-names-lisp-p token lisp-files)) (command-tokens command))
+                     :test #'string= :from-end t))
+
+(defparameter *file-writers* '("cp" "mv" "install" "ln" "rsync")
+  "Programs whose last word names the file or directory they write.")
+
+(defun option-p (word) (and (plusp (length word)) (char= (char word 0) #\-)))
+
+(defun redirection-targets (words)
+  "The files that the redirections among WORDS write: the rest of a word that starts with > (after an optional stream
+   number), or the word after a bare > or >>. 2>&1 and the like name no file."
+  (let ((targets '()))
+    (loop while words
+          do (let* ((word (pop words))
+                    (start (position-if-not #'digit-char-p word)))
+               (when (and start (char= (char word start) #\>))
+                 (let ((rest (string-left-trim ">" (subseq word start))))
+                   (cond ((and (plusp (length rest)) (char/= (char rest 0) #\&)) (push rest targets))
+                         ((and (zerop (length rest)) words (plusp (length (first words)))
+                               (char/= (char (first words) 0) #\&))
+                          (push (pop words) targets)))))))
+    (nreverse targets)))
+
+(defun writer-targets (words lisp-files)
+  "The Lisp code files a simple command writes with a program: tee (every file named), dd (of=), or cp, mv, install, ln
+   and rsync (the last word, or, when that is a Lisp directory and a source is a Lisp file, the file that lands in it)."
+  (multiple-value-bind (base rest) (unwrap words)
+    (let ((files (remove-if #'option-p rest)))
+      (cond ((null base) '())
+            ((string= base "tee") (remove-if-not (lambda (w) (code-file-p w lisp-files)) files))
+            ((string= base "dd")
+             (loop for w in rest
+                   when (and (> (length w) 3) (string= "of=" w :end2 3) (code-file-p (subseq w 3) lisp-files))
+                   collect (subseq w 3)))
+            ((member base *file-writers* :test #'string=)
+             (let ((destination (car (last files))) (sources (butlast files)))
+               (cond ((null destination) '())
+                     ((code-file-p destination lisp-files) (list destination))
+                     ((and (in-lisp-directory-p destination lisp-files)
+                           (some (lambda (s) (code-file-p s lisp-files)) sources))
+                      (list (format nil "~a/~a" (string-right-trim "/" destination)
+                                    (base-name (find-if (lambda (s) (code-file-p s lisp-files)) sources)))))
+                     (t '()))))
+            (t '())))))
+
+(defun written-lisp-files (command lisp-files)
+  "The Lisp code files that COMMAND would write from the shell: by a redirection, or by tee, cp, mv, install, ln, rsync
+   or dd."
+  (remove-duplicates
+   (loop for words in (split-simple-commands command)
+         append (remove-if-not (lambda (target) (code-file-p target lisp-files)) (redirection-targets words))
+         append (writer-targets words lisp-files))
+   :test #'string= :from-end t))
+
+;;; The verdicts
+
+(defparameter *file-edit-tools* '("Edit" "MultiEdit" "Write")
+  "The Claude Code tools that change a file by its path (tool_input.file_path).")
+
+(defun workbench-advice (file)
+  (format nil "Lisp is changed in the image and saved from it: define it with bin/lisp eval '(defun ...)', test it there, then (save 'name :file ~s)." file))
+
+(defun file-edit-refusal (tool path lisp-files)
+  "NIL if the call of TOOL on PATH may proceed, else the refusal message. Edit and MultiEdit may not change a file with a
+   code suffix of LISP-FILES, Write may not replace one; Write may create one that does not exist. A call with no path
+   cannot be judged and is refused."
+  (cond ((not (member tool *file-edit-tools* :test #'string=)) nil)
+        ((not (stringp path))
+         (format nil "bin/lisp guard: the ~a call has no file_path, so it cannot be judged: refused." tool))
+        ((not (code-file-p path lisp-files)) nil)
+        ((and (string= tool "Write") (not (probe-file path))) nil)
+        (t (format nil "Blocked: ~a on the Lisp file ~a. ~a The Write tool may only create a Lisp file that does not exist yet."
+                   tool path (workbench-advice path)))))
+
+(defun refusal-message (uses names forbidden)
   (let ((distinct (remove-duplicates uses :test #'string= :from-end t)))
-    (format nil "Blocked: ~{~a~^, ~} ~:[is a text-processing program~;are text-processing programs~]. ~
-                 In this project, read, search and change files as Lisp forms (the REPL, bin/lisp eval), ~
-                 and let the Lisp printer format them. Forbidden: ~{~a~^ ~}."
-            distinct (rest distinct) forbidden)))
+    (format nil "Blocked: ~{~a~^, ~} ~:[is a text-processing program~;are text-processing programs~], used here on Lisp (~{~a~^, ~}). Lisp is read and changed in the image: bin/lisp eval, describe, who-calls, form-edit. On files that are not Lisp these programs are allowed. Forbidden on Lisp: ~{~a~^ ~}."
+            distinct (rest distinct) names forbidden)))
+
+(defun writer-message (files)
+  (format nil "Blocked: this command would write the Lisp file~p ~{~a~^, ~} from the shell. ~a"
+          (length files) files (workbench-advice (first files))))
+
+(defun hook-verdict (hook-json forbidden lisp-files)
+  "NIL if the Claude Code hook payload HOOK-JSON may proceed, else the refusal message. A Bash call is refused when it
+   would write a Lisp code file, or runs a program of FORBIDDEN and also names Lisp (LISP-FILES); a call of Edit,
+   MultiEdit or Write is judged by FILE-EDIT-REFUSAL. Other tools are not judged. A payload that cannot be read is refused."
+  (let ((payload (handler-case (com.inuoe.jzon:parse hook-json) (error () nil))))
+    (if (not (hash-table-p payload))
+        "bin/lisp guard could not read the hook payload as JSON, so it refuses the call."
+        (let* ((tool (gethash "tool_name" payload))
+               (input (let ((input (gethash "tool_input" payload))) (and (hash-table-p input) input))))
+          (cond ((equal tool "Bash")
+                 (let ((command (and input (gethash "command" input))))
+                   (when (stringp command)
+                     (let ((written (written-lisp-files command lisp-files)))
+                       (if written
+                           (writer-message written)
+                           (let* ((uses (forbidden-uses command forbidden))
+                                  (names (and uses (lisp-names command lisp-files))))
+                             (when (and uses names) (refusal-message uses names forbidden))))))))
+                ((member tool *file-edit-tools* :test #'equal)
+                 (file-edit-refusal tool (and input (gethash "file_path" input)) lisp-files)))))))
 
 (defun deny-json (reason)
   "The Claude Code PreToolUse decision that refuses a tool call, with REASON, as a JSON string."
@@ -220,61 +369,57 @@
           (gethash "hookSpecificOutput" decision) details)
     (com.inuoe.jzon:stringify decision)))
 
-(defun hook-bash-call (hook-json)
-  "(values id command) of the Claude Code hook payload HOOK-JSON when it is a call of the Bash tool, else NIL."
-  (let ((payload (handler-case (com.inuoe.jzon:parse hook-json) (error nil nil))))
-    (when (and (hash-table-p payload) (equal (gethash "tool_name" payload) "Bash"))
-      (let* ((input (gethash "tool_input" payload)) (command (and (hash-table-p input) (gethash "command" input))))
-        (when (stringp command) (values (gethash "tool_use_id" payload) command))))))
-
-(defun hook-verdict (hook-json forbidden)
-  "NIL if the Claude Code hook payload HOOK-JSON may proceed, else the refusal message.
-   Only Bash calls are judged. A payload that cannot be read is refused."
-  (let ((payload (handler-case (com.inuoe.jzon:parse hook-json)
-                   (error () nil))))
-    (if (not (hash-table-p payload))
-        "bin/lisp guard could not read the hook payload as JSON, so it refuses the call."
-        (when (equal (gethash "tool_name" payload) "Bash")
-          (let* ((input (gethash "tool_input" payload))
-                 (command (and (hash-table-p input) (gethash "command" input)))
-                 (uses (and (stringp command) (forbidden-uses command forbidden))))
-            (when uses (refusal-message uses forbidden)))))))
-
 (defun forbidden-programs (project)
-  "The programs named in rules/forbidden-programs.sexp of PROJECT: the one list the guard and the permission rules both
-   come from. A missing file is an error, never an empty list."
+  "The programs named in rules/forbidden-programs.sexp of PROJECT. A missing file is an error, never an empty list."
   (lisp-ai-project:read-rules project "forbidden-programs"))
 
-(defparameter *program-directories*
-  '("/bin" "/usr/bin" "/usr/local/bin" "/opt/homebrew/bin")
-  "Where a forbidden program may be started from by its full path. Claude Code's deny rule for the plain name does not match
-   /usr/bin/sed, so each program is also denied under each of these directories. Not every place a program can live.")
+;;; The gate log: one line per denial, in the project's run/gate.log
 
-(defun permission-rules (forbidden)
-  "The Claude Code permission rules that deny each program in FORBIDDEN in Bash: by its name, then by its full path in each
-   of *PROGRAM-DIRECTORIES*."
-  (loop for program in forbidden
-        append
-          (cons (format nil "Bash(~a *)" program)
-                (mapcar (lambda (directory) (format nil "Bash(~a/~a *)" directory program)) *program-directories*))))
+(defvar *gate-log* "run/gate.log"
+  "Where a denial is written, relative to the project's directory. NIL writes nothing.")
 
-(defun settings-with-deny (settings-json forbidden)
-  "SETTINGS-JSON, the text of a Claude Code settings file, with permissions.deny set to exactly the rules for FORBIDDEN.
-   Everything else in it is kept. Returns JSON text."
-  (let* ((settings (com.inuoe.jzon:parse settings-json))
-         (permissions (or (gethash "permissions" settings) (make-hash-table :test 'equal))))
-    (setf (gethash "deny" permissions) (coerce (permission-rules forbidden) 'vector)
-          (gethash "permissions" settings) permissions)
-    (com.inuoe.jzon:stringify settings :pretty t)))
+(defun log-denial (project hook-json reason)
+  "Append one line to PROJECT's gate log: the time, the tool, the command or file, and REASON. A failure to log never
+   changes the verdict."
+  (when (and project *gate-log*)
+    (ignore-errors
+     (let* ((payload (com.inuoe.jzon:parse hook-json))
+            (input (gethash "tool_input" payload))
+            (what (and (hash-table-p input) (or (gethash "command" input) (gethash "file_path" input))))
+            (file (merge-pathnames *gate-log* (lisp-ai-project:project-directory project))))
+       (ensure-directories-exist file)
+       (with-open-file (out file :direction :output :if-exists :append :if-does-not-exist :create
+                                 :external-format :utf-8)
+         (multiple-value-bind (s m h day month year) (get-decoded-time)
+           (format out "~d-~2,'0d-~2,'0d ~2,'0d:~2,'0d:~2,'0d~c~a~c~s~c~a~%" year month day h m s #\Tab
+                   (gethash "tool_name" payload) #\Tab (if (stringp what) (substitute #\Space #\Newline what) "")
+                   #\Tab reason)))))))
 
-(defun sync-deny-rules (project)
-  "Rewrite PROJECT's .claude/settings.json so its permissions.deny lists the rules for its
-   rules/forbidden-programs.sexp. The deny list is generated: change the rules file and run this, never edit the list by
-   hand. Returns the rules."
-  (let* ((path (merge-pathnames ".claude/settings.json" (lisp-ai-project:project-directory project)))
-         (forbidden (forbidden-programs project))
-         (new (settings-with-deny (uiop/stream:read-file-string path) forbidden)))
-    (with-open-file (out path :direction :output :if-exists :supersede :external-format :utf-8)
-      (write-string new out)
-      (terpri out))
-    (permission-rules forbidden)))
+(defun hook-response (hook-json forbidden lisp-files &optional project)
+  "What the hook prints for HOOK-JSON: the empty string to allow, a deny decision to refuse. A denial is logged in
+   PROJECT's gate log when PROJECT is given."
+  (let ((refusal (hook-verdict hook-json forbidden lisp-files)))
+    (cond (refusal (log-denial project hook-json refusal) (deny-json refusal))
+          (t ""))))
+
+(defun respond (project hook-json)
+  "HOOK-RESPONSE for HOOK-JSON with the forbidden programs and the Lisp files read from PROJECT's rules."
+  (hook-response hook-json (forbidden-programs project) (lisp-files project) project))
+
+;;; The always-on image answers hook payloads on its socket, which bin/lisp guard asks first. A reply that is empty or has
+;;; no marker is not an answer (a dropped connection, a server that read the payload as Lisp), so the script then takes
+;;; the slow path instead of reading silence as permission.
+
+(defparameter *socket-marker* "OK:" "What a reply from the socket starts with when the gate judged the payload.")
+
+(defun socket-marker () *socket-marker*)
+
+(defun hook-payload-p (request)
+  "True when the text REQUEST is a Claude Code hook payload (JSON, which starts with a brace) and not Lisp."
+  (let ((start (position-if-not (lambda (c) (member c '(#\Space #\Tab #\Newline #\Return))) request)))
+    (and start (char= (char request start) #\{))))
+
+(defun socket-reply (request forbidden project)
+  "The reply to a hook payload REQUEST on the socket: the marker, then HOOK-RESPONSE with PROJECT's rules. FORBIDDEN is
+   the list of programs the server was started with."
+  (concatenate 'string *socket-marker* (hook-response request forbidden (lisp-files project) project)))

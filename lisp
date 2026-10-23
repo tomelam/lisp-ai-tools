@@ -4,10 +4,10 @@
 # (.qlot/dists/lisp-ai-tools/software/), with the name of the project's ASDF system. Nothing here derives a name or a path
 # from a directory name; shared files are taken from the directory of this script.
 #   eval '(form)'     evaluate in the project's always-on image, started first when it is down; print the values
-#   start|stop|status the always-on image (loads bin/serve.lisp, answers on run/lisp.sock)
+#   start|stop|status the always-on image (loads bin/serve.lisp, answers on run/lisp.sock); stop refuses while the image
+#                     holds definitions no file holds (lisp-ai-bench), stop --discard does not
 #   test              load the system fresh and run ASDF test-op on SYSTEM/tests
-#   guard             Claude Code PreToolUse hook for Bash: refuse the programs in rules/forbidden-programs.sexp
-#   profile KIND      Claude Code PostToolUse hook: log a call for the profile (KIND is post or failure)
+#   guard             Claude Code PreToolUse hook for Bash, Edit, Write and MultiEdit: the gate (lisp-ai-tools/guard)
 #   qlot ARGS...      Qlot with the setup file that pins cl+ssl to openssl@3 (needed to install or update, not to run)
 # Everything else is the project's own: bin/serve.lisp. Qlot is $HOME/.qlot/bin/qlot, or $QLOT.
 system=$1
@@ -49,11 +49,33 @@ start_server() {
   esac
 }
 
+# The workbench's answer to (lisp-ai-bench:pending-names): NIL, a list of names, or anything else when the image cannot
+# say (an image older than the workbench, a dropped connection).
+unsaved() { printf '(lisp-ai-bench:pending-names)' | nc -w 5 -U "$socket" 2>/dev/null; }
+
 status_server() {
-  if running; then echo "running (pid $(cat "$pidfile"))"; else echo "not running"; return 1; fi
+  if running; then
+    case "$(unsaved)" in
+      NIL*) echo "running (pid $(cat "$pidfile")), nothing unsaved" ;;
+      "("*) echo "running (pid $(cat "$pidfile")), unsaved definitions: $(unsaved)" ;;
+      *) echo "running (pid $(cat "$pidfile")); it could not say what is unsaved" ;;
+    esac
+  else echo "not running"; return 1; fi
 }
 
 stop_server() {
+  # An image that holds definitions no file holds is not stopped: they would be lost. --discard says so is meant.
+  if running && [ "$1" != "--discard" ]; then
+    pending=$(unsaved)
+    case "$pending" in
+      NIL*) ;;
+      "("*)
+        echo "lisp-server holds unsaved definitions: $pending" >&2
+        echo "save them first (bin/lisp eval '(save-all)' or '(save (quote name) :file \"src/x.lisp\")'), or bin/lisp stop --discard" >&2
+        return 1 ;;
+      *) echo "warning: the image could not say what is unsaved ($pending); stopping anyway" >&2 ;;
+    esac
+  fi
   if [ -f "$pidfile" ]; then
     pid=$(cat "$pidfile")
     kill "$pid" 2>/dev/null
@@ -80,7 +102,7 @@ case $word in
     printf '%s' "$1" | nc -w 300 -U "$socket" || { echo "no answer from lisp-server on $socket" >&2; exit 1; }
     ;;
   start) start_server ;;
-  stop) stop_server ;;
+  stop) stop_server "$1" ;;
   status) status_server ;;
   test)
     # The loader's redefinition warnings go to run/test.stderr; a load or test error is printed on stdout.
@@ -114,7 +136,7 @@ case $word in
     "$qlot" exec sbcl --noinform --non-interactive \
       --eval "(let ((*standard-output* *error-output*))
                 (asdf:load-asd (truename \"$system.asd\"))
-                (asdf:load-system \"lisp-ai-tools/hook\"))" \
+                (asdf:load-system \"lisp-ai-tools/guard\"))" \
       --load "$tools/guard-main.lisp" 2>run/guard.stderr
     status=$?
     if [ "$status" -ne 0 ]; then
@@ -122,21 +144,11 @@ case $word in
     fi
     exit 0
     ;;
-  profile)
-    # Appends "epoch TAB KIND TAB json" to run/profile/events.log, but only while run/profile/on exists. It never prints a
-    # decision and always exits 0, so it can never block a call.
-    kind=$1
-    payload=$(cat)
-    [ -f run/profile/on ] || exit 0
-    mkdir -p run/profile
-    printf '%s\t%s\t%s\n' "$(date +%s)" "$kind" "$payload" >> run/profile/events.log
-    exit 0
-    ;;
   qlot)
     QLOT_SETUP_FILE="$tools/qlot-setup.lisp" exec "$qlot" "$@"
     ;;
   *)
-    echo "usage: bin/lisp eval|start|stop|status|test|guard|profile|qlot ..." >&2
+    echo "usage: bin/lisp eval|start|stop|status|test|guard|qlot ..." >&2
     exit 2
     ;;
 esac
