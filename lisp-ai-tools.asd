@@ -15,4 +15,19 @@
 ;;; small system can use it.
 (defsystem "lisp-ai-tools/profile" :description
  "Logs what the guard and the deny list decide, and whether the command ran, for each project." :depends-on
- ("com.inuoe.jzon" "uiop") :components ((:file "profile")))
+ ("lisp-ai-tools/project" "com.inuoe.jzon" "uiop") :components ((:file "profile")))
+
+;;; Where a project is and how its data files are read (tools/project.lisp). The guard and the profile use it.
+(defsystem "lisp-ai-tools/project" :description "A project's directory and the data files in its rules/ and data/."
+ :depends-on ("uiop") :components ((:file "project")))
+
+;;; Which text-processing programs a shell command runs, and the deny list made from the same rules (tools/guard.lisp).
+;;; It knows nothing of the profiler; lisp-ai-tools/hook joins the two.
+(defsystem "lisp-ai-tools/guard" :description
+ "Which text-processing programs does a shell command run? The permission rules that deny them." :depends-on
+ ("lisp-ai-tools/project" "com.inuoe.jzon" "uiop") :components ((:file "guard")))
+
+;;; What Claude Code's PreToolUse hook for Bash prints (tools/hook.lisp): the guard's verdict, logged and shadowed by the profile.
+(defsystem "lisp-ai-tools/hook" :description
+ "The hook response: the guard's verdict, with the profile's logging and shadow." :depends-on
+ ("lisp-ai-tools/guard" "lisp-ai-tools/profile") :components ((:file "hook")))
