@@ -348,10 +348,70 @@
                                (push (list name (get-output-stream-string output)) failed))))))))
              (list :registered (nreverse registered) :skipped (nreverse skipped) :failed (nreverse failed)))))))
 
+(defun image-form-p (intended read-back scratch package)
+  "Whether READ-BACK, a form read from the file's text in SCRATCH, is the form INTENDED, which was given as a form (its
+   symbols are the image's) or read from the source text (its symbols are in SCRATCH too). Like same-form-p, but a symbol
+   that the file writes without a package prefix and that reads into SCRATCH is the one the image's PACKAGE, the package
+   of the file, finds by that name: the symbol meant, and not another with the same name. Numbers must be EQL."
+  (cond
+   ((and (symbolp intended) (symbolp read-back))
+    (or (eq intended read-back)
+        (and (null (symbol-package intended)) (null (symbol-package read-back))
+             (string= (symbol-name intended) (symbol-name read-back)))
+        (and package (eq (symbol-package read-back) scratch)
+             (eq intended (find-symbol (symbol-name read-back) package)))))
+   ((and (consp intended) (consp read-back))
+    (and (image-form-p (car intended) (car read-back) scratch package)
+         (image-form-p (cdr intended) (cdr read-back) scratch package)))
+   ((and (stringp intended) (stringp read-back)) (string= intended read-back))
+   ((and (characterp intended) (characterp read-back)) (char= intended read-back))
+   ((and (sb-int:comma-p intended) (sb-int:comma-p read-back))
+    (and (eql (sb-int:comma-kind intended) (sb-int:comma-kind read-back))
+         (image-form-p (sb-int:comma-expr intended) (sb-int:comma-expr read-back) scratch package)))
+   ((numberp intended) (eql intended read-back)) (t (equalp intended read-back))))
+
+(defun intended-forms (sources scratch)
+  "The forms that the SOURCES of an edit mean: a source that is text means the forms it reads as, in SCRATCH; any other
+   source is a form and means itself. NIL sources are left out."
+  (loop for source in sources
+        when (stringp source) append (mapcar #'node-expression (read-nodes source scratch)) else
+        when source collect source))
+
+(defun check-written-forms (intended nodes scratch package)
+  "An error unless the top-level NODES, the forms an edit wrote into the file, read as the INTENDED forms: each node as
+   one of them, each of them once, in any order. This is the file's copy compared with what the image meant."
+  (let ((remaining (copy-list intended)))
+    (dolist (node nodes)
+      (let ((match
+             (find (node-expression node) remaining :test
+                   (lambda (written meant) (image-form-p meant written scratch package)))))
+        (unless match
+          (let ((*print-length* 8) (*print-level* 4) (*package* scratch))
+            (error "The file would hold a form that is not the one meant: ~s. Nothing written"
+                   (node-expression node))))
+        (setf remaining (remove match remaining :count 1 :test #'eq))))
+    (when remaining
+      (let ((*print-length* 8) (*print-level* 4) (*package* scratch))
+        (error "The file would lack ~d of the forms meant, the first being ~s. Nothing written" (length remaining)
+               (first remaining))))))
+
+(defun verify-written (path text)
+  "An error unless the file PATH now holds exactly TEXT, read back from the disk: the check of the artifact itself, after
+   the write. A file that is not what was meant is left for the caller to see; nothing is repaired."
+  (let ((now (file-text path)))
+    (unless (string= now text)
+      (error
+       "The file ~a was written, but reading it back does not give the text meant (~d characters, ~d meant): look at it before anything else"
+       path (length now) (length text)))))
+
 (defun edit (path &key replace delete insert-before insert-after append header)
-  "Change the top-level forms of the file PATH. REPLACE, INSERT-BEFORE and INSERT-AFTER are alists of (key . source-text), DELETE is a list of keys, APPEND and HEADER are text. A key is a form's name (the symbol or string after its operator, in upper case) or, for a form with no name, (:form TEXT): the form that reads as TEXT. Every other byte stays as it was. New source text may carry comments between its forms, kept as typed; a comment inside a form is refused. Deleting a form takes the comment after it on its line with it, not the comments above it. An error, and no write, when a key is not exactly one form, when a form to replace or delete is governed by #+ or #-, or when the result does not read back as the other forms, unchanged and in order. A source, and the new code of a subform, may also be a form, not text: any value but a string is printed, in the package of the file's in-package, so it can be built in the image (a form with a symbol of the SCRATCH package is refused). Comments in the new code need text. Returns PATH and, as a second value, what REGISTER-LOCATIONS did: the written definitions that the image already has are given their place in the file, so that M-. finds them."
+  "Change the top-level forms of the file PATH. REPLACE, INSERT-BEFORE and INSERT-AFTER are alists of (key . source-text), DELETE is a list of keys, APPEND and HEADER are text. A key is a form's name (the symbol or string after its operator, in upper case) or, for a form with no name, (:form TEXT): the form that reads as TEXT. Every other byte stays as it was. New source text may carry comments between its forms, kept as typed; a comment inside a form is refused. Deleting a form takes the comment after it on its line with it, not the comments above it. An error, and no write, when a key is not exactly one form, when a form to replace or delete is governed by #+ or #-, or when the result does not read back as the other forms, unchanged and in order, followed by exactly the forms meant: the new forms in the file are compared with the forms the sources mean (a source that is text means the forms it reads as, a source that is a form means that form, its symbols the image's), so a printer that wrote something else is caught before the write. A source, and the new code of a subform, may also be a form, not text: any value but a string is printed, in the package of the file's in-package, so it can be built in the image (a form with a symbol of the SCRATCH package is refused). Comments in the new code need text. Returns PATH and, as a second value, what REGISTER-LOCATIONS did: the written definitions that the image already has are given their place in the file, so that M-. finds them."
   (with-scratch-package (scratch)
-   (let* ((text (file-text path))
+   (let* ((intended
+           (intended-forms
+            (append (mapcar #'cdr replace) (mapcar #'cdr insert-before) (mapcar #'cdr insert-after) (list append))
+            scratch))
+          (text (file-text path))
           (nodes (read-nodes text scratch))
           (replace (alist-source-text replace nodes))
           (insert-before (alist-source-text insert-before nodes))
@@ -427,7 +487,10 @@
              (let ((tail (member expression after :test #'same-form-p)))
                (unless tail (error "The edit would change a form it was not asked to: nothing written"))
                (setf after (cdr tail))))
-           (write-file path result)
+           (progn
+            (check-written-forms intended (changed-nodes untouched result-nodes) scratch
+             (ignore-errors (file-package nodes)))
+            (progn (write-file path result) (verify-written path result)))
            (values path
                    (register-locations path result result-nodes (changed-nodes untouched result-nodes) scratch))))))))
 
@@ -537,7 +600,7 @@
                              (same-form-p (node-expression now) expected)
                              (same-form-p (node-expression now) (node-expression before)))
                        (error "The edit would not read back as the one change meant: nothing written")))
-             (write-file path result)
+             (progn (write-file path result) (verify-written path result))
              (values path (register-locations path result after (list (nth (position top nodes) after)) scratch)))))))))
 
 (defun edit-subform (path name old new)

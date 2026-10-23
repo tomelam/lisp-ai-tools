@@ -648,6 +648,73 @@
       (dolist (symbol (list a b c new)) (when (fboundp symbol) (fmakunbound symbol)))
       (when (boundp p) (makunbound p)))))
 
+(defun run-written-forms (directory)
+  "edit checks that the forms it wrote read back as the forms meant, not only that the other forms are unchanged. The
+   check is broken once on purpose: the printer is made to write a 2 for every 1, which leaves the number of forms and
+   every untouched form as they were, so only this check can see it."
+  (let ((path (merge-pathnames "form-edit-test-written.lisp" directory))
+        (sample
+         "(in-package :cl-user)
+
+(defun a () 0)
+
+(defun b () 0)
+"))
+    (flet ((damaged (thunk)
+             (sb-int:encapsulate 'form-edit::printed 'damage
+                                 (lambda (function &rest arguments) (substitute #\2 #\1 (apply function arguments))))
+             (unwind-protect (refused-p thunk) (sb-int:unencapsulate 'form-edit::printed 'damage))))
+      (unwind-protect
+          (progn
+           (write-text path sample)
+           (check "a damaged replacement of text is refused"
+            (damaged (lambda () (form-edit::edit path :replace '(("A" . "(defun a () 1)"))))))
+           (check "a damaged replacement given as a form is refused"
+            (damaged (lambda () (form-edit::edit path :replace '(("A" defun a nil 1))))))
+           (check "a damaged insertion is refused"
+            (damaged (lambda () (form-edit::edit path :insert-after '(("B" . "(defun c () 1)"))))))
+           (check "a damaged appended form is refused"
+            (damaged (lambda () (form-edit::edit path :append "(defun d () 1)"))))
+           (check "one damaged form among several is refused"
+            (damaged
+             (lambda ()
+               (form-edit::edit path :replace '(("A" . "(defun a () 0)")) :insert-after '(("B" . "(defun c () 1)"))))))
+           (check-equal "every refusal left the file as it was" (text-of path) sample)
+           (form-edit::edit path :replace '(("A" . "(defun a () 1)")))
+           (check "the same edit, undamaged, is written" (search "(defun a () 1)" (text-of path))))
+        (when (probe-file path) (delete-file path))))))
+
+(defun run-read-back (directory)
+  "After a write, edit and edit-subform read the file back from the disk and compare it with the text they meant to
+   write. The check is broken once on purpose: write-file is made to drop the last character."
+  (let ((path (merge-pathnames "form-edit-test-read-back.lisp" directory))
+        (sample
+         "(defun a () 0)
+
+(defun b () 0)
+"))
+    (flet ((short-write (thunk)
+             (write-text path sample)
+             (sb-int:encapsulate 'form-edit::write-file 'short
+                                 (lambda (function path text)
+                                   (funcall function path (subseq text 0 (1- (length text))))))
+             (unwind-protect (refused-p thunk) (sb-int:unencapsulate 'form-edit::write-file 'short))))
+      (unwind-protect
+          (progn
+           (write-text path sample)
+           (check "edit refuses when the file does not read back as written"
+            (short-write (lambda () (form-edit::edit path :replace '(("A" . "(defun a () 1)"))))))
+           (check "edit-subform refuses when the file does not read back as written"
+            (short-write (lambda () (form-edit::edit-subform path "A" "0" "1"))))
+           (check "delete-subform refuses when the file does not read back as written"
+            (short-write (lambda () (form-edit::delete-subform path "A" "0"))))
+           (write-text path sample)
+           (form-edit::edit path :replace '(("A" . "(defun a () 1)")))
+           (form-edit::edit-subform path "B" "0" "2")
+           (check "undamaged writes are not refused"
+            (and (search "(defun a () 1)" (text-of path)) (search "(defun b () 2)" (text-of path)))))
+        (when (probe-file path) (delete-file path))))))
+
 (defun run (directory)
   "Run every check of form-edit, with DIRECTORY (a pathname ending in a slash) for scratch files. Returns the number of failures."
   (setf *failures* 0)
@@ -665,5 +732,7 @@
     (run-insert-after directory)
     (run-loop-layout directory)
     (run-form-sources directory)
-    (run-locations directory))
+    (run-locations directory)
+    (run-written-forms directory)
+    (run-read-back directory))
   *failures*)
