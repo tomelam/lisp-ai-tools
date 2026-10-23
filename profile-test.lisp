@@ -11,8 +11,8 @@
 (defvar *failures* 0)
 
 (defvar *here*
-  (directory-namestring (asdf/system:system-relative-pathname "lisp-ai-tools" "profile-hook"))
-  "The directory of the tools, where the script profile-hook is; the one test that runs a script needs it.")
+  (directory-namestring (asdf/system:system-relative-pathname "lisp-ai-tools" "lisp"))
+  "The directory of the tools, where the script lisp is; the one test that runs a script needs it.")
 
 (defmacro check (label form)
   "Count a failure, naming LABEL, unless FORM is true."
@@ -120,31 +120,33 @@
 
 (defun run-hook (project)
   (let* ((dir (namestring (lisp-ai-profile:project-directory project)))
-         (script (concatenate 'string *here* "profile-hook"))
+         (script (concatenate 'string *here* "lisp"))
          (log (merge-pathnames "run/profile/events.log" (lisp-ai-profile:project-directory project)))
          (payload "{\"hook_event_name\":\"PostToolUse\",\"tool_use_id\":\"h1\",\"tool_name\":\"Bash\"}"))
     (when (probe-file log) (delete-file log))
     (lisp-ai-profile:profiling project :off)
     (multiple-value-bind (out err code)
         (with-input-from-string (in payload)
-          (uiop:run-program (list "sh" script dir "post") :input in :output :string :error-output :string
-                                                          :ignore-error-status t))
+          (uiop/run-program:run-program (list "sh" script "scratch" "profile" "post") :directory dir :input in :output
+                                        :string :error-output :string :ignore-error-status t))
       (check-equal "with profiling off the hook prints nothing and exits 0" (list out err code) (list "" "" 0)))
     (check "and logs nothing" (not (probe-file log)))
     (lisp-ai-profile:profiling project :on)
     (multiple-value-bind (out err code)
         (with-input-from-string (in payload)
-          (uiop:run-program (list "sh" script dir "post") :input in :output :string :error-output :string
-                                                          :ignore-error-status t))
+          (uiop/run-program:run-program (list "sh" script "scratch" "profile" "post") :directory dir :input in :output
+                                        :string :error-output :string :ignore-error-status t))
       (check-equal "with profiling on it prints nothing and exits 0" (list out err code) (list "" "" 0)))
-    (multiple-value-bind (events bad) (lisp-ai-profile:read-events project)
+    (multiple-value-bind (events bad)
+        (lisp-ai-profile:read-events project)
       (check-equal "and logs one readable event" (list (length events) bad) '(1 0))
       (check-equal "of kind post, with the payload intact"
-                   (list (second (first events)) (gethash "tool_use_id" (third (first events)))) '("post" "h1")))
-    (lisp-ai-profile:record-guard project :id "h1" :command "ls" :verdict :allow :programs '() :shadowed nil)
+       (list (second (first events)) (gethash "tool_use_id" (third (first events)))) '("post" "h1")))
+    (lisp-ai-profile:record-guard project :id "h1" :command "ls" :verdict :allow :programs 'nil :shadowed nil)
     (check-equal "the guard's record and the hook's join into a call that ran"
-                 (let ((entry (entry-for (lisp-ai-profile:entries project) "h1"))) (list (getf entry :guard) (getf entry :ran)))
-                 '(:allowed t))
+     (let ((entry (entry-for (lisp-ai-profile:entries project) "h1")))
+       (list (getf entry :guard) (getf entry :ran)))
+     '(:allowed t))
     (lisp-ai-profile:profiling project :off)))
 
 (defun run (directory)
