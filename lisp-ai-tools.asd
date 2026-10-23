@@ -23,6 +23,16 @@
   :depends-on ("sb-bsd-sockets" "sb-concurrency" "slynk")
   :components ((:file "debug")))
 
+;;; The workbench (tools/bench.lisp, docs/workbench.md): the ledger of
+;;; the definitions made in the image through bin/lisp eval, and the
+;;; commands that save them to files as typed.
+(defsystem "lisp-ai-tools/bench"
+  :description
+  "The workbench: definitions made in the image, saved to files later."
+  :depends-on ("lisp-ai-tools" "lisp-ai-tools/project" "lisp-ai-tools/debug"
+               "sb-introspect" "uiop")
+  :components ((:file "bench")))
+
 ;;; The gate (tools/guard.lisp, docs/workbench.md): the one PreToolUse
 ;;; hook, for Bash and for Edit, Write and MultiEdit. A Lisp file is
 ;;; changed only through the workbench.
@@ -39,7 +49,8 @@
 (defsystem "lisp-ai-tools/tests"
   :description
   "The tests of the shared tools; a project calls their RUN functions."
-  :depends-on ("lisp-ai-tools" "lisp-ai-tools/debug" "lisp-ai-tools/guard"
-               "sb-posix" "sb-bsd-sockets" "uiop")
+  :depends-on ("lisp-ai-tools" "lisp-ai-tools/debug" "lisp-ai-tools/bench"
+               "lisp-ai-tools/guard" "sb-posix" "sb-bsd-sockets" "uiop")
   :components ((:file "form-edit-test") (:file "debug-test")
-               (:file "guard-test") (:file "lisp-script-test")))
+               (:file "bench-test") (:file "guard-test")
+               (:file "lisp-script-test")))

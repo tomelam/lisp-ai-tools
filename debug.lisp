@@ -6,7 +6,7 @@
 ;;;; calls EVAL-WITH-DEBUGGING, and its SERVE-CONNECTION binds *REPLY-NOW* with REPLY-NOW-FUNCTION.
 (defpackage :lisp-ai-debug
   (:use :cl)
-  (:export #:eval-with-debugging #:reply-now-function #:*reply-now* #:condition-text
+  (:export #:eval-with-debugging #:reply-now-function #:*reply-now* #:*eval-observer* #:condition-text
            #:debug-frames #:debug-locals #:debug-eval #:debug-result #:debug-restart-frame #:debug-invoke #:debug-abandon))
 (in-package :lisp-ai-debug)
 
@@ -28,6 +28,17 @@
 
 (defvar *session* nil
   "The session of the request being evaluated, once an error in it has been held.")
+
+(defvar *eval-observer* nil
+  "A function called around each top-level form of a request: (funcall observer :before form text) before it is
+   evaluated and (funcall observer :after form text) after, TEXT being the form's span of the request as typed, comments
+   above it included. The workbench (lisp-ai-bench) sets it to its RECORD-FORM. An error in the observer is printed into
+   the reply as a ;; ledger: line and never held.")
+
+(defun observe (when form text reply)
+  (when *eval-observer*
+    (handler-case (funcall *eval-observer* when form text)
+      (error (e) (format reply ";; ledger: ~a~%" (condition-text e))))))
 
 (defstruct (session (:constructor make-session (id)))
   id
@@ -162,9 +173,16 @@
      (restart-case (handler-bind ((error (lambda (condition) (hold-error condition reply))))
                      (let ((*package* (find-package package)) (*standard-output* reply) (*error-output* reply))
                        (with-input-from-string (forms request)
-                         (loop for form = (read forms nil forms)
+                         (loop with start = 0
+                               for form = (read forms nil forms)
                                until (eq form forms)
-                               do (dolist (value (multiple-value-list (eval form))) (format reply "~s~%" value))))))
+                               do (let* ((end (file-position forms))
+                                         (text (subseq request start (min end (length request)))))
+                                    (observe :before form text reply)
+                                    (let ((values (multiple-value-list (eval form))))
+                                      (observe :after form text reply)
+                                      (dolist (value values) (format reply "~s~%" value)))
+                                    (setf start end))))))
        (abort-request (&optional condition) :report
         "Unwind the request and reply with the error, as without debugging."
         (format reply "ERROR: ~a~%" (condition-text (or condition (session-condition *session*))))))
