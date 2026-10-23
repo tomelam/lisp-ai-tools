@@ -470,9 +470,8 @@
          (output (make-string-output-stream))
          (ledger (sb-thread:with-mutex (*ledger-lock*) (copy-list *ledger*)))
          ;; The tests are run as a plain call, not as a request: an error a test makes on purpose is unwound as the
-         ;; test expects, not held; and nothing the tests define through the server lands in the ledger.
-         (lisp-ai-debug:*reply-now* nil)
-         (lisp-ai-debug:*eval-observer* nil))
+         ;; test expects, not held. The ledger is put back afterwards, so nothing the tests define stays in it.
+         (lisp-ai-debug:*reply-now* nil))
     (unwind-protect
          (progn
            (let ((*standard-output* (make-broadcast-stream *standard-output* output))
