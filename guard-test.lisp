@@ -234,7 +234,7 @@ git status" nil)))
 (defun guard-output (script socket)
   "What the guard word of SCRIPT (the project's bin/lisp) prints for a refused command when the socket SOCKET is the only
    place it can ask."
-  (with-input-from-string (payload (hook-json "Bash" "cat f"))
+  (with-input-from-string (payload (hook-json "Bash" "cat f.lisp"))
     (uiop/run-program:run-program (list "env" (format nil "LISP_AI_SOCKET=~a" socket) script "guard") :input payload
                                   :output :string :ignore-error-status t)))
 
