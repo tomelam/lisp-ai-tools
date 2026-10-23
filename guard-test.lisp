@@ -1,7 +1,7 @@
-;;;; Tests of guard.lisp, hook.lisp and tools/guard, shared by every project under ~/lisp-ai: a project's harness loads this
-;;;; file and calls (lisp-ai-guard-tests:run DIRECTORY PROJECT), which makes a scratch project inside DIRECTORY (the project's
-;;;; run/) for the checks that need one, removes it afterwards, checks the real PROJECT (its bin/guard and its
-;;;; .claude/settings.json), and returns how many checks failed, printing a line for each.
+;;;; Tests of guard.lisp, hook.lisp and tools/guard, shared by every project under ~/lisp-ai as part of the system
+;;;; lisp-ai-tools/tests: a project calls (lisp-ai-guard-tests:run DIRECTORY PROJECT), which makes a scratch project inside
+;;;; DIRECTORY (the project's run/) for the checks that need one, removes it afterwards, checks the real PROJECT (its bin/guard
+;;;; and its .claude/settings.json), and returns how many checks failed, printing a line for each.
 
 (defpackage :lisp-ai-guard-tests
   (:use :cl)

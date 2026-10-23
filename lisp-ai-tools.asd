@@ -31,3 +31,10 @@
 (defsystem "lisp-ai-tools/hook" :description
  "The hook response: the guard's verdict, with the profile's logging and shadow." :depends-on
  ("lisp-ai-tools/guard" "lisp-ai-tools/profile") :components ((:file "hook")))
+
+;;; The tests of all the above, as one system, so that a project runs them by naming it (no path to a file): each file has a
+;;; package with RUN, and a project calls (form-edit-tests:run DIRECTORY) and so on from its own tests (docs: CLAUDE.md of the tree).
+(defsystem "lisp-ai-tools/tests" :description
+ "The tests of the tools every project shares; a project calls their RUN functions." :depends-on
+ ("lisp-ai-tools" "lisp-ai-tools/debug" "lisp-ai-tools/hook" "lisp-ai-tools/profile" "uiop") :components
+ ((:file "form-edit-test") (:file "debug-test") (:file "profile-test") (:file "guard-test")))

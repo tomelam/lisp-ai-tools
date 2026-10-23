@@ -1,7 +1,7 @@
-;;;; Tests of form-edit.lisp, shared by every project under ~/lisp-ai: a project's harness loads this file and calls
-;;;; (form-edit-tests:run DIRECTORY), which uses DIRECTORY for scratch files (the project's run/) and returns how many
-;;;; checks failed, printing a line for each. form-edit changes a Lisp file as forms: only the forms it is told to change are
-;;;; rewritten, and everything else, comments included, stays byte for byte.
+;;;; Tests of form-edit.lisp, shared by every project under ~/lisp-ai as part of the system lisp-ai-tools/tests: a
+;;;; project calls (form-edit-tests:run DIRECTORY), which uses DIRECTORY for scratch files (the project's run/) and returns
+;;;; how many checks failed, printing a line for each. form-edit changes a Lisp file as forms: only the forms it is told to
+;;;; change are rewritten, and everything else, comments included, stays byte for byte.
 
 (defpackage :form-edit-tests
   (:use :cl)

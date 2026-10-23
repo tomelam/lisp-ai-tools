@@ -1,6 +1,6 @@
-;;;; Tests of profile.lisp and profile-hook, shared by every project under ~/lisp-ai: a project's harness loads this file and
-;;;; calls (lisp-ai-profile-tests:run DIRECTORY), which makes a scratch project inside DIRECTORY (the project's run/), removes
-;;;; it afterwards and returns how many checks failed, printing a line for each.
+;;;; Tests of profile.lisp and profile-hook, shared by every project under ~/lisp-ai as part of the system
+;;;; lisp-ai-tools/tests: a project calls (lisp-ai-profile-tests:run DIRECTORY), which makes a scratch project inside DIRECTORY
+;;;; (the project's run/), removes it afterwards and returns how many checks failed, printing a line for each.
 
 (defpackage :lisp-ai-profile-tests
   (:use :cl)
@@ -10,7 +10,9 @@
 
 (defvar *failures* 0)
 
-(defvar *here* (directory-namestring (or *load-truename* *compile-file-truename*)))
+(defvar *here*
+  (directory-namestring (asdf/system:system-relative-pathname "lisp-ai-tools" "profile-hook"))
+  "The directory of the tools, where the script profile-hook is; the one test that runs a script needs it.")
 
 (defmacro check (label form)
   "Count a failure, naming LABEL, unless FORM is true."
