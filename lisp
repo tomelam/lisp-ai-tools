@@ -6,8 +6,7 @@
 #   eval '(form)'     evaluate in the project's always-on image, started first when it is down; print the values
 #   start|stop|status the always-on image (loads bin/serve.lisp, answers on run/lisp.sock)
 #   test              load the system fresh and run ASDF test-op on SYSTEM/tests
-#   guard             Claude Code PreToolUse hook for Bash: refuse the programs in rules/forbidden-programs.sexp
-#   profile KIND      Claude Code PostToolUse hook: log a call for the profile (KIND is post or failure)
+#   guard             Claude Code PreToolUse hook for Bash, Edit, Write and MultiEdit: the gate (lisp-ai-tools/guard)
 #   qlot ARGS...      Qlot with the setup file that pins cl+ssl to openssl@3 (needed to install or update, not to run)
 # Everything else is the project's own: bin/serve.lisp. Qlot is $HOME/.qlot/bin/qlot, or $QLOT.
 system=$1
@@ -114,7 +113,7 @@ case $word in
     "$qlot" exec sbcl --noinform --non-interactive \
       --eval "(let ((*standard-output* *error-output*))
                 (asdf:load-asd (truename \"$system.asd\"))
-                (asdf:load-system \"lisp-ai-tools/hook\"))" \
+                (asdf:load-system \"lisp-ai-tools/guard\"))" \
       --load "$tools/guard-main.lisp" 2>run/guard.stderr
     status=$?
     if [ "$status" -ne 0 ]; then
@@ -122,21 +121,11 @@ case $word in
     fi
     exit 0
     ;;
-  profile)
-    # Appends "epoch TAB KIND TAB json" to run/profile/events.log, but only while run/profile/on exists. It never prints a
-    # decision and always exits 0, so it can never block a call.
-    kind=$1
-    payload=$(cat)
-    [ -f run/profile/on ] || exit 0
-    mkdir -p run/profile
-    printf '%s\t%s\t%s\n' "$(date +%s)" "$kind" "$payload" >> run/profile/events.log
-    exit 0
-    ;;
   qlot)
     QLOT_SETUP_FILE="$tools/qlot-setup.lisp" exec "$qlot" "$@"
     ;;
   *)
-    echo "usage: bin/lisp eval|start|stop|status|test|guard|profile|qlot ..." >&2
+    echo "usage: bin/lisp eval|start|stop|status|test|guard|qlot ..." >&2
     exit 2
     ;;
 esac

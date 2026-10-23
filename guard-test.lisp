@@ -1,7 +1,8 @@
-;;;; Tests of guard.lisp, hook.lisp and tools/guard, shared by every project under ~/lisp-ai as part of the system
-;;;; lisp-ai-tools/tests: a project calls (lisp-ai-guard-tests:run DIRECTORY PROJECT), which makes a scratch project inside
-;;;; DIRECTORY (the project's run/) for the checks that need one, removes it afterwards, checks the real PROJECT (its bin/guard
-;;;; and its .claude/settings.json), and returns how many checks failed, printing a line for each.
+;;;; Tests of guard.lisp (the gate) and of the word guard of the script lisp, shared by every project under ~/lisp-ai as
+;;;; part of the system lisp-ai-tools/tests: a project calls (lisp-ai-guard-tests:run DIRECTORY PROJECT), which makes a
+;;;; scratch project inside DIRECTORY (the project's run/) for the checks that need one, removes it afterwards, checks the
+;;;; real PROJECT (its bin/lisp guard, its .claude/settings.json and its rules), and returns how many checks failed,
+;;;; printing a line for each.
 
 (defpackage :lisp-ai-guard-tests
   (:use :cl)
@@ -33,12 +34,15 @@
 (defparameter *lisp-files*
   '(:code-suffixes ("lisp" "asd") :data-suffixes ("sexp") :directories ("src" "tests" "tools")))
 
-(defun verdict (json) (lisp-ai-guard:hook-verdict json *forbidden* *lisp-files*))
-
 (defun uses (command) (lisp-ai-guard:forbidden-uses command *forbidden*))
+
+(defun verdict (json) (lisp-ai-guard:hook-verdict json *forbidden* *lisp-files*))
 
 (defun hook-json (tool command)
   (format nil "{\"tool_name\":~s,\"tool_input\":{\"command\":~s}}" tool command))
+
+(defun file-edit-json (tool path)
+  (format nil "{\"tool_name\":~s,\"tool_input\":{\"file_path\":~s}}" tool path))
 
 (defun run-guard ()
   ;; each row: a command, and the forbidden programs it runs
@@ -69,62 +73,12 @@ git status" nil)))
       (check-equal command (uses command) expected)))
   ;; the hook verdict: NIL lets the call through, a string refuses it and names the program
   (let ((refusal (verdict (hook-json "Bash" "cat f.lisp"))))
-    (check "a forbidden command is refused with a message" (stringp refusal))
+    (check "a forbidden command on Lisp is refused with a message" (stringp refusal))
     (check "and the message names the program" (search "cat" refusal)))
   (check "an allowed command goes through" (null (verdict (hook-json "Bash" "git status"))))
   (check "a call of another tool goes through" (null (verdict (hook-json "Read" "cat f.lisp"))))
   ;; a hook payload that cannot be read is refused loudly, never waved through
   (check "a payload that is not JSON is refused" (stringp (verdict "not json"))))
-
-(defun run-lisp-files ()
-  "A forbidden program is refused only when the command also names Lisp: a file with a code or data suffix, or a path
-   through one of the Lisp directories. On any other file it is allowed. Each row is a command and whether it is refused."
-  (dolist
-      (row
-       '(("sed -i s/a/b/ src/x.lisp" t) ("cat x.asd" t) ("cat data/t.sexp" t) ("grep -r foo src" t)
-         ("grep foo ./tests/a" t) ("git diff -- a.lisp | head -5" t) ("echo a | sed s/a/b/ > out.lisp" t)
-         ("sh -c 'sed p x.lisp'" t) ("python3 -c 'print(open(\"x.lisp\").read())'" t) ("wc -l run/test.stderr" nil)
-         ("jq . report.json" nil) ("git status | head" nil) ("sort names.txt" nil) ("cat notes.md" nil)
-         ("grep foo docs/a.md" nil) ("diff a.txt b.txt" nil) ("echo x.lisp" nil) ("ls src tests" nil)
-         ("cat tests-output.txt" nil) ("sed p lisp" nil)))
-    (destructuring-bind
-        (command refused)
-        row
-      (check-equal command (and (verdict (hook-json "Bash" command)) t) refused)))
-  (check "the refusal names the Lisp file" (search "x.lisp" (verdict (hook-json "Bash" "cat x.lisp"))))
-  (check "and says other files are allowed" (search "not Lisp" (verdict (hook-json "Bash" "cat x.lisp")))))
-
-(defun file-edit-json (tool path) (format nil "{\"tool_name\":~s,\"tool_input\":{\"file_path\":~s}}" tool path))
-
-(defun run-file-edit (directory)
-  "The Edit, MultiEdit and Write tools may not change a Lisp file (suffix lisp or asd) that exists: it is changed as
-   forms, through the image. Write may create one that does not exist yet. Files that are not code, and other tools, go
-   through. A call with no file_path is refused, not guessed at."
-  (let ((existing (namestring (merge-pathnames "guard-test-existing.lisp" directory)))
-        (absent (namestring (merge-pathnames "guard-test-absent.lisp" directory)))
-        (notes (namestring (merge-pathnames "guard-test-notes.md" directory))))
-    (write-file existing (format nil "(x)~%"))
-    (write-file notes (format nil "text~%"))
-    (when (probe-file absent) (delete-file absent))
-    (unwind-protect
-        (progn
-         (check "Edit of a Lisp file is refused" (stringp (verdict (file-edit-json "Edit" existing))))
-         (check "and the message points to form-edit"
-          (search "form-edit::edit" (verdict (file-edit-json "Edit" existing))))
-         (check "MultiEdit of a Lisp file is refused" (stringp (verdict (file-edit-json "MultiEdit" existing))))
-         (check "Edit of an .asd file is refused" (stringp (verdict (file-edit-json "Edit" "/x/y/z.asd"))))
-         (check "Write over an existing Lisp file is refused" (stringp (verdict (file-edit-json "Write" existing))))
-         (check "Write of a Lisp file that does not exist yet is allowed"
-          (null (verdict (file-edit-json "Write" absent))))
-         (check "Edit of a data file (.sexp) is allowed" (null (verdict (file-edit-json "Edit" "/x/data/t.sexp"))))
-         (check "Edit of a markdown file is allowed" (null (verdict (file-edit-json "Edit" notes))))
-         (check "Write over an existing markdown file is allowed" (null (verdict (file-edit-json "Write" notes))))
-         (check "Read of a Lisp file is allowed" (null (verdict (file-edit-json "Read" existing))))
-         (check "a call with no file_path is refused"
-          (stringp (verdict "{\"tool_name\":\"Edit\",\"tool_input\":{\"old_string\":\"a\"}}")))
-         (check "a Write whose file_path is not a string is refused"
-          (stringp (verdict "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":7}}"))))
-      (dolist (file (list existing notes absent)) (when (probe-file file) (delete-file file))))))
 
 (defun run-guard-wrappers ()
   "Wrappers with options that take a value, shells given a script, eval and find -exec: the program inside is still
@@ -156,61 +110,128 @@ git status" nil)))
   (check "a substitution nested in a substitution inside double quotes is found"
          (member "sed" (uses "echo \"x $(echo \"$(sed p f)\")\"") :test #'string=)))
 
-(defun hook-json-with-id (tool command id)
-  (format nil "{\"tool_name\":~s,\"tool_use_id\":~s,\"tool_input\":{\"command\":~s}}" tool id command))
+(defun run-lisp-files ()
+  "A forbidden program is refused only when the command also names Lisp: a file with a code or data suffix, or a path
+   through one of the Lisp directories. On any other file it is allowed. Each row is a command and whether it is refused."
+  (dolist
+      (row
+       '(("sed -i s/a/b/ src/x.lisp" t) ("cat x.asd" t) ("cat data/t.sexp" t) ("grep -r foo src" t)
+         ("grep foo ./tests/a" t) ("git diff -- a.lisp | head -5" t) ("sh -c 'sed p x.lisp'" t)
+         ("python3 -c 'print(open(\"x.lisp\").read())'" t) ("wc -l run/test.stderr" nil) ("jq . report.json" nil)
+         ("git status | head" nil) ("sort names.txt" nil) ("cat notes.md" nil) ("grep foo docs/a.md" nil)
+         ("diff a.txt b.txt" nil) ("echo x.lisp" nil) ("ls src tests" nil) ("cat tests-output.txt" nil)
+         ("sed p lisp" nil)))
+    (destructuring-bind (command refused) row
+      (check-equal command (and (verdict (hook-json "Bash" command)) t) refused)))
+  (check "the refusal names the Lisp file" (search "x.lisp" (verdict (hook-json "Bash" "cat x.lisp"))))
+  (check "and says other files are allowed" (search "not Lisp" (verdict (hook-json "Bash" "cat x.lisp")))))
+
+(defun run-writers ()
+  "A shell command that would write a Lisp code file is refused whatever program runs it: a redirection into one, tee,
+   cp, mv, install, ln, rsync, dd. Writing other files, and reading Lisp files with these programs, is allowed. Each row
+   is a command and the files it would write."
+  (dolist
+      (row
+       '(("echo x > src/a.lisp" ("src/a.lisp")) ("echo x >> a.lisp" ("a.lisp")) ("echo x >src/a.lisp" ("src/a.lisp"))
+         ("printf '(x)' 1> x.asd" ("x.asd")) ("echo a | tee src/a.lisp" ("src/a.lisp"))
+         ("cp /tmp/x.lisp src/a.lisp" ("src/a.lisp")) ("cp /tmp/x.lisp src/" ("src/x.lisp"))
+         ("mv a.lisp src/b.lisp" ("src/b.lisp")) ("install -m 644 x.lisp src/x.lisp" ("src/x.lisp"))
+         ("ln -s /tmp/x.lisp src/x.lisp" ("src/x.lisp")) ("dd if=/dev/zero of=src/a.lisp" ("src/a.lisp"))
+         ("ls && echo x > tests/t.lisp" ("tests/t.lisp")) ("sh -c 'echo x > a.lisp'" nil)
+         ("echo x > run/notes.txt" nil) ("echo x 2>&1" nil) ("cat src/a.lisp > /tmp/copy.txt" nil)
+         ("cp src/a.lisp /tmp/" nil) ("cp a.txt src/" nil) ("echo a | tee run/out.log" nil) ("git mv a.lisp b.lisp" nil)))
+    (destructuring-bind (command expected) row
+      (check-equal command (lisp-ai-guard:written-lisp-files command *lisp-files*) expected)))
+  (let ((refusal (verdict (hook-json "Bash" "echo '(defun f ())' > src/f.lisp"))))
+    (check "a shell write of a Lisp file is refused" (stringp refusal))
+    (check "and the message points to the workbench" (and refusal (search "(save '" refusal))))
+  (check "a shell write of another file is allowed" (null (verdict (hook-json "Bash" "echo x > run/out.txt")))))
+
+(defun run-file-edit (directory)
+  "The Edit, MultiEdit and Write tools may not change a Lisp file (suffix lisp or asd) that exists: it is changed in the
+   image and saved from it. Write may create one that does not exist yet. Files that are not code, and other tools, go
+   through. A call with no file_path is refused, not guessed at."
+  (let ((existing (namestring (merge-pathnames "guard-test-existing.lisp" directory)))
+        (absent (namestring (merge-pathnames "guard-test-absent.lisp" directory)))
+        (notes (namestring (merge-pathnames "guard-test-notes.md" directory))))
+    (write-file existing (format nil "(x)~%"))
+    (write-file notes (format nil "text~%"))
+    (when (probe-file absent) (delete-file absent))
+    (unwind-protect
+        (progn
+         (check "Edit of a Lisp file is refused" (stringp (verdict (file-edit-json "Edit" existing))))
+         (check "and the message points to the workbench"
+                (search "(save '" (verdict (file-edit-json "Edit" existing))))
+         (check "MultiEdit of a Lisp file is refused" (stringp (verdict (file-edit-json "MultiEdit" existing))))
+         (check "Edit of an .asd file is refused" (stringp (verdict (file-edit-json "Edit" "/x/y/z.asd"))))
+         (check "Write over an existing Lisp file is refused" (stringp (verdict (file-edit-json "Write" existing))))
+         (check "Write of a Lisp file that does not exist yet is allowed"
+                (null (verdict (file-edit-json "Write" absent))))
+         (check "Edit of a data file (.sexp) is allowed" (null (verdict (file-edit-json "Edit" "/x/data/t.sexp"))))
+         (check "Edit of a markdown file is allowed" (null (verdict (file-edit-json "Edit" notes))))
+         (check "Write over an existing markdown file is allowed" (null (verdict (file-edit-json "Write" notes))))
+         (check "Read of a Lisp file is allowed" (null (verdict (file-edit-json "Read" existing))))
+         (check "a call with no file_path is refused"
+                (stringp (verdict "{\"tool_name\":\"Edit\",\"tool_input\":{\"old_string\":\"a\"}}")))
+         (check "a Write whose file_path is not a string is refused"
+                (stringp (verdict "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":7}}"))))
+      (dolist (file (list existing notes absent)) (when (probe-file file) (delete-file file))))))
+
+(defun gate-log-lines (root)
+  (let ((file (merge-pathnames "run/gate.log" root)))
+    (if (probe-file file)
+        (with-open-file (in file :external-format :utf-8)
+          (loop for line = (read-line in nil) while line collect line))
+        '())))
 
 (defun run-hook (root)
-  "The hook (tools/hook.lisp), on the scratch project ROOT: while profiling is on it logs what the guard decided; while the
-   shadow is active it lets a command of rules/profile-corpus.sexp through (every command, with the limit off) and logs it
-   as shadowed; a failure to log never changes its verdict."
-  (flet ((respond (command id)
-           (lisp-ai-hook:hook-response (hook-json-with-id "Bash" command id) *forbidden* root))
-         (denied-p (reply)
-           (and (search "\"permissionDecision\":\"deny\"" reply) t))
-         (guards ()
-           (mapcar (lambda (entry) (getf entry :guard)) (lisp-ai-profile:entries root))))
-    (check "profiling off: a forbidden command is denied" (denied-p (respond "cat /dev/null.lisp" "t1")))
-    (check "and nothing is logged" (not (probe-file (merge-pathnames "run/profile/events.log" root))))
-    (lisp-ai-profile:profiling root :on)
-    (check "profiling on: still denied" (denied-p (respond "cat /dev/null.lisp" "t2")))
-    (check-equal "an allowed command is allowed" (respond "echo hi" "t3") "")
-    (lisp-ai-profile:shadowing root :on)
-    (check-equal "shadow on, limit on: a corpus command is let through" (respond "cat /dev/null.lisp" "t4") "")
-    (check "but another forbidden command is still denied" (denied-p (respond "cat /etc/hosts.lisp" "t5")))
-    (lisp-ai-profile:limit root :off)
-    (check-equal "limit off: any command is let through" (respond "cat /etc/hosts.lisp" "t6") "")
-    (lisp-ai-profile:limit root :on)
-    (lisp-ai-profile:shadowing root :off)
-    (check "shadow off: the corpus command is denied again" (denied-p (respond "cat /dev/null.lisp" "t7")))
-    (check-equal "what the guard logged, in order" (guards)
-     '(:denied :allowed :would-deny :denied :would-deny :denied))
+  "The hook response on the scratch project ROOT: a deny decision for a refused call, the empty string for an allowed
+   one; respond reads both rules files of the project; each denial is one line in run/gate.log and an allowed call none."
+  (flet ((respond (json) (lisp-ai-guard:hook-response json *forbidden* *lisp-files* root))
+         (denied-p (reply) (and (search "\"permissionDecision\":\"deny\"" reply) t)))
+    (check "a forbidden command on Lisp is denied" (denied-p (respond (hook-json "Bash" "cat /dev/null.lisp"))))
+    (check-equal "an allowed command is allowed" (respond (hook-json "Bash" "echo hi")) "")
     (check-equal "a call of another tool is let through"
-     (lisp-ai-hook:hook-response "{\"tool_name\":\"Read\",\"tool_input\":{}}" *forbidden* root) "")
-    (check-equal "and is not logged" (length (guards)) 6)
-    (check-equal "respond reads the forbidden programs from the project's rules"
-     (denied-p (lisp-ai-hook:respond root (hook-json-with-id "Bash" "head /dev/null.lisp" "t9"))) t)
-    (let ((log (merge-pathnames "run/profile/events.log" root)))
-      (delete-file log)
-      (ensure-directories-exist (merge-pathnames "x" (merge-pathnames "run/profile/events.log/" root)))
-      (check "logging fails when events.log cannot be written, yet the verdict stands"
-       (denied-p (respond "cat /dev/null.lisp" "t8")))
-      (check "and the failure is counted" (eql 1 (lisp-ai-profile:error-count root))))))
+                 (respond "{\"tool_name\":\"Read\",\"tool_input\":{}}") "")
+    (check "an Edit of a Lisp file is denied"
+           (denied-p (respond (file-edit-json "Edit" (namestring (merge-pathnames "src/a.lisp" root))))))
+    (check-equal "respond reads the forbidden programs and the Lisp files from the project's rules"
+                 (denied-p (lisp-ai-guard:respond root (hook-json "Bash" "head /dev/null.lisp"))) t)
+    (check-equal "respond allows head on a file that is not Lisp"
+                 (lisp-ai-guard:respond root (hook-json "Bash" "head /dev/null")) "")
+    (let ((lines (gate-log-lines root)))
+      (check-equal "three denials, three lines in the gate log" (length lines) 3)
+      (check "a line names the tool and the command" (and lines (search "Bash" (first lines)) (search "cat /dev/null.lisp" (first lines))))
+      (check "the Edit denial names the file" (and (third lines) (search "Edit" (second lines)))))
+    (let ((lisp-ai-guard:*gate-log* nil))
+      (check "with the log off a denial is still a denial" (denied-p (respond (hook-json "Bash" "cat x.lisp"))))
+      (check-equal "and nothing more is written" (length (gate-log-lines root)) 3))))
 
 (defun guard-hook-wired-p (settings matcher)
   "True when SETTINGS (a parsed settings object) has a PreToolUse hook with the matcher MATCHER whose command ends in
    /bin/lisp guard."
   (let* ((hooks (gethash "hooks" settings)) (entries (and hooks (gethash "PreToolUse" hooks))))
-    (and
-     (some
-      (lambda (entry)
-        (and (equal (gethash "matcher" entry) matcher)
-             (some
-              (lambda (hook)
-                (let ((command (gethash "command" hook)))
-                  (and (stringp command) (uiop/utility:string-suffix-p command "/bin/lisp guard"))))
-              (coerce (gethash "hooks" entry) 'list))))
-      (coerce entries 'list))
-     t)))
+    (and (some (lambda (entry)
+                 (and (equal (gethash "matcher" entry) matcher)
+                      (some (lambda (hook)
+                              (let ((command (gethash "command" hook)))
+                                (and (stringp command) (uiop/utility:string-suffix-p command "/bin/lisp guard"))))
+                            (coerce (gethash "hooks" entry) 'list))))
+               (coerce entries 'list))
+         t)))
+
+(defun profile-hook-p (settings)
+  "True when any hook command in SETTINGS still calls bin/lisp profile."
+  (let ((hooks (gethash "hooks" settings)) (found nil))
+    (when hooks
+      (maphash (lambda (event entries)
+                 (declare (ignore event))
+                 (loop for entry across entries
+                       do (loop for hook across (gethash "hooks" entry)
+                                when (search "lisp profile" (or (gethash "command" hook) ""))
+                                do (setf found t))))
+               hooks))
+    found))
 
 (defun answer-once (path reply)
   "Listen on the Unix socket PATH and answer the first connection with REPLY, after reading its request to the end, as the
@@ -231,16 +252,16 @@ git status" nil)))
               (close stream))
          (sb-bsd-sockets:socket-close listener))))))
 
-(defun guard-output (script socket)
-  "What the guard word of SCRIPT (the project's bin/lisp) prints for a refused command when the socket SOCKET is the only
-   place it can ask."
-  (with-input-from-string (payload (hook-json "Bash" "cat f.lisp"))
-    (uiop/run-program:run-program (list "env" (format nil "LISP_AI_SOCKET=~a" socket) script "guard") :input payload
+(defun guard-output (script socket &optional (payload (hook-json "Bash" "cat f.lisp")))
+  "What the guard word of SCRIPT (the project's bin/lisp) prints for PAYLOAD when the socket SOCKET is the only place it
+   can ask."
+  (with-input-from-string (in payload)
+    (uiop/run-program:run-program (list "env" (format nil "LISP_AI_SOCKET=~a" socket) script "guard") :input in
                                   :output :string :ignore-error-status t)))
 
 (defun run-socket-replies (guard)
-  "tools/guard trusts the image's reply only when it starts with the marker: an empty reply (a dropped connection) and an
-   error text are not answers, so the guard judges the command itself; a reply with the marker is the answer."
+  "bin/lisp guard trusts the image's reply only when it starts with the marker: an empty reply (a dropped connection) and
+   an error text are not answers, so the guard judges the command itself; a reply with the marker is the answer."
   (let ((path (format nil "/tmp/lisp-ai-guard-fake-~d.sock" (sb-posix:getpid))))
     (unwind-protect
          (progn
@@ -250,15 +271,17 @@ git status" nil)))
            (answer-once path "ERROR: boom")
            (check "an error text is not trusted: the command is refused anyway"
                   (search "\"permissionDecision\":\"deny\"" (guard-output guard path)))
-           (answer-once path (lisp-ai-hook:socket-marker))
+           (answer-once path (lisp-ai-guard:socket-marker))
            (check-equal "a reply with the marker is the answer, here to allow" (guard-output guard path) ""))
       (when (probe-file path) (delete-file path)))))
 
 (defun run-project (project)
-  "The checks on the real PROJECT: its bin/lisp guard falls back to a fresh guard when the socket file is stale, answers only on a reply with the marker, and its .claude/settings.json wires the guard hook for Bash and for Edit, Write and MultiEdit, has no deny list, and has a rules/lisp-files.sexp."
+  "The checks on the real PROJECT: its bin/lisp guard falls back to a fresh guard when the socket file is stale and judges
+   an Edit payload too; its .claude/settings.json wires the guard hook for Bash and for Edit, Write and MultiEdit, has no
+   deny list and no profile hook; its rules say what Lisp is."
   (let ((stale (format nil "/tmp/lisp-ai-guard-stale-~d.sock" (sb-posix:getpid)))
         (guard (namestring (merge-pathnames "bin/lisp" (uiop/pathname:ensure-directory-pathname project)))))
-    ;; bin/guard with a stale socket file (the server died and left it) must fall back to a fresh guard, never wave through
+    ;; bin/lisp guard with a stale socket file (the server died and left it) must fall back to a fresh guard, never wave through
     (when (probe-file stale) (delete-file stale))
     (let ((socket (make-instance 'sb-bsd-sockets:local-socket :type :stream)))
       (sb-bsd-sockets:socket-bind socket stale)
@@ -267,37 +290,35 @@ git status" nil)))
          (progn
            (check "the stale socket file exists" (probe-file stale))
            (check "bin/lisp guard still refuses with a stale socket"
-            (search "\"permissionDecision\":\"deny\"" (guard-output guard stale))))
+                  (search "\"permissionDecision\":\"deny\"" (guard-output guard stale)))
+           (check "and refuses an Edit of a Lisp file the same way"
+                  (search "\"permissionDecision\":\"deny\""
+                          (guard-output guard stale
+                                        (file-edit-json "Edit" (namestring (merge-pathnames "src/x.lisp" (uiop/pathname:ensure-directory-pathname project))))))))
       (when (probe-file stale) (delete-file stale)))
     (run-socket-replies guard))
-  (let ((settings
-         (com.inuoe.jzon:parse
-          (uiop/stream:read-file-string
-           (merge-pathnames ".claude/settings.json" (uiop/pathname:ensure-directory-pathname project))))))
+  (let ((settings (com.inuoe.jzon:parse
+                   (uiop:read-file-string (merge-pathnames ".claude/settings.json" (uiop:ensure-directory-pathname project))))))
     (check "the project settings wire bin/lisp guard as a PreToolUse hook on Bash" (guard-hook-wired-p settings "Bash"))
     (check "and on the tools that change a file by its path" (guard-hook-wired-p settings "Edit|Write|MultiEdit"))
-    (check "and carry no permissions.deny list: the guard decides by what a command names"
-     (null (gethash "deny" (or (gethash "permissions" settings) (make-hash-table)))))
+    (check "and carry no permissions.deny list: the gate decides by what a command names"
+           (null (gethash "deny" (or (gethash "permissions" settings) (make-hash-table)))))
+    (check "and no profile hook" (not (profile-hook-p settings)))
     (check "the project's rules/lisp-files.sexp says what Lisp is"
-     (member "lisp" (getf (lisp-ai-guard:lisp-files project) :code-suffixes) :test #'equal))))
+           (member "lisp" (getf (lisp-ai-guard:lisp-files project) :code-suffixes) :test #'equal))))
 
 (defun run (directory project)
   "Run the checks with a scratch project inside DIRECTORY, and the checks on the real PROJECT (a directory); returns the
    number of failures."
   (setf *failures* 0)
-  (let ((root (merge-pathnames "guard-test-project/" (uiop/pathname:ensure-directory-pathname directory))))
-    (when (probe-file root) (uiop/filesystem:delete-directory-tree root :validate t))
-    (write-file (merge-pathnames "rules/profile-corpus.sexp" root) (format nil "(\"cat /dev/null.lisp\")~%"))
+  (let ((root (merge-pathnames "guard-test-project/" (uiop:ensure-directory-pathname directory))))
+    (when (probe-file root) (uiop:delete-directory-tree root :validate t))
     (write-file (merge-pathnames "rules/forbidden-programs.sexp" root) (format nil "(\"cat\" \"head\")~%"))
     (write-file (merge-pathnames "rules/lisp-files.sexp" root) (format nil "~s~%" *lisp-files*))
+    (write-file (merge-pathnames "src/a.lisp" root) (format nil "(x)~%"))
     (unwind-protect
-        (progn
-         (run-guard)
-         (run-guard-wrappers)
-         (run-guard-structure)
-         (run-lisp-files)
-         (run-file-edit directory)
-         (run-hook root))
-      (when (probe-file root) (uiop/filesystem:delete-directory-tree root :validate t))))
+         (progn (run-guard) (run-guard-wrappers) (run-guard-structure) (run-lisp-files) (run-writers)
+                (run-file-edit directory) (run-hook root))
+      (when (probe-file root) (uiop:delete-directory-tree root :validate t))))
   (run-project project)
   *failures*)
