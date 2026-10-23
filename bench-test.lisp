@@ -147,7 +147,8 @@
 (defmethod bench-test-m ((x integer)) :integer)
 (defmethod bench-test-m ((x string)) :string)")
     (check-equal "four definitions are pending" (mapcar #'first (lisp-ai-bench:pending)) '(:defvar :defgeneric :defmethod :defmethod))
-    (check-equal "save-all writes them all into the given file" (length (lisp-ai-bench:save-all :file "src/t.lisp")) 4)
+    (check-equal "save-all writes them all into the given file: two names, the methods with their generic function"
+                 (length (lisp-ai-bench:save-all :file "src/t.lisp")) 2)
     (check-equal "nothing is left" (lisp-ai-bench:pending) '())
     (let ((text (text-of source)))
       (check "the variable's docstring is there" (search "\"a variable\"" text))

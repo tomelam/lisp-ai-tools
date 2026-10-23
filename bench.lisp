@@ -327,10 +327,11 @@
                (old (find-if (lambda (node) (form-key-matches-p (form-edit::node-expression node) entry scratch)) nodes))
                (new-text (entry-text entry))
                (new-comments (text-comments new-text scratch)))
-          (when (and (string= (package-name (entry-package entry)) "CL-USER")
-                     (not (eq (ignore-errors (form-edit::file-package nodes)) (find-package :cl-user))))
-            (error "bench: ~a was read in CL-USER but ~a is in package ~a: define it in that package and save that" name
-                   (enough-namestring path (project-directory)) (package-name (form-edit::file-package nodes))))
+          (let ((file-package (handler-case (form-edit::file-package nodes) (error (e) (error "bench: ~a" e)))))
+            (unless (eq file-package (entry-package entry))
+              (error "bench: ~a was read in package ~a but ~a is in package ~a: define it in that package (an (in-package ...) form first in the same request) and save that"
+                     name (package-name (entry-package entry)) (enough-namestring path (project-directory))
+                     (package-name file-package))))
           (cond
             (old
              (let* ((old-text (subseq text (form-edit::node-start old) (form-edit::node-end old)))
