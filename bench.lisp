@@ -489,9 +489,10 @@
                                                (throw 'bench-quit code)))
              (unwind-protect (catch 'bench-quit (funcall run))
                (sb-int:unencapsulate quit 'bench))
-             (let ((failures (if (and failures-symbol (boundp failures-symbol)) (symbol-value failures-symbol) :unknown)))
-               (when compiled (format t "~&;; bench: reloaded from disk: ~{~a~^, ~}~%" (nreverse compiled)))
-               (values failures (reverse compiled)))))
+             (let ((failures (if (and failures-symbol (boundp failures-symbol)) (symbol-value failures-symbol) :unknown))
+                   (compiled (reverse compiled)))
+               (when compiled (format t "~&;; bench: reloaded from disk: ~{~a~^, ~}~%" compiled))
+               (values failures compiled))))
       (sb-thread:with-mutex (*ledger-lock*) (setf *ledger* ledger))
       (persist))))
 
