@@ -1,7 +1,7 @@
-;;;; Tests of guard.lisp, hook.lisp and tools/guard, shared by every project under ~/lisp-ai: a project's harness loads this
-;;;; file and calls (lisp-ai-guard-tests:run DIRECTORY PROJECT), which makes a scratch project inside DIRECTORY (the project's
-;;;; run/) for the checks that need one, removes it afterwards, checks the real PROJECT (its bin/guard and its
-;;;; .claude/settings.json), and returns how many checks failed, printing a line for each.
+;;;; Tests of guard.lisp, hook.lisp and tools/guard, shared by every project under ~/lisp-ai as part of the system
+;;;; lisp-ai-tools/tests: a project calls (lisp-ai-guard-tests:run DIRECTORY PROJECT), which makes a scratch project inside
+;;;; DIRECTORY (the project's run/) for the checks that need one, removes it afterwards, checks the real PROJECT (its bin/guard
+;;;; and its .claude/settings.json), and returns how many checks failed, printing a line for each.
 
 (defpackage :lisp-ai-guard-tests
   (:use :cl)
@@ -164,13 +164,13 @@ git status" nil)))
 
 (defun guard-hook-wired-p (settings)
   "True when SETTINGS (a parsed settings object) has a PreToolUse hook with the matcher Bash whose command ends in
-   /bin/guard."
+   /bin/lisp guard."
   (let* ((hooks (gethash "hooks" settings)) (entries (and hooks (gethash "PreToolUse" hooks))))
     (and (some (lambda (entry)
                  (and (equal (gethash "matcher" entry) "Bash")
                       (some (lambda (hook)
                               (let ((command (gethash "command" hook)))
-                                (and (stringp command) (uiop:string-suffix-p command "/bin/guard"))))
+                                (and (stringp command) (uiop/utility:string-suffix-p command "/bin/lisp guard"))))
                             (coerce (gethash "hooks" entry) 'list))))
                (coerce entries 'list))
          t)))
@@ -194,11 +194,12 @@ git status" nil)))
               (close stream))
          (sb-bsd-sockets:socket-close listener))))))
 
-(defun guard-output (guard socket)
-  "What GUARD prints for a refused command when the socket SOCKET is the only place it can ask."
+(defun guard-output (script socket)
+  "What the guard word of SCRIPT (the project's bin/lisp) prints for a refused command when the socket SOCKET is the only
+   place it can ask."
   (with-input-from-string (payload (hook-json "Bash" "cat f"))
-    (uiop:run-program (list "env" (format nil "LISP_AI_SOCKET=~a" socket) guard)
-                      :input payload :output :string :ignore-error-status t)))
+    (uiop/run-program:run-program (list "env" (format nil "LISP_AI_SOCKET=~a" socket) script "guard") :input payload
+                                  :output :string :ignore-error-status t)))
 
 (defun run-socket-replies (guard)
   "tools/guard trusts the image's reply only when it starts with the marker: an empty reply (a dropped connection) and an
@@ -220,7 +221,7 @@ git status" nil)))
   "The checks on the real PROJECT: its bin/guard falls back to a fresh guard when the socket file is stale, and its
    .claude/settings.json is in step with rules/forbidden-programs.sexp and still wires the guard hook."
   (let ((stale (format nil "/tmp/lisp-ai-guard-stale-~d.sock" (sb-posix:getpid)))
-        (guard (namestring (merge-pathnames "bin/guard" (uiop:ensure-directory-pathname project)))))
+        (guard (namestring (merge-pathnames "bin/lisp" (uiop/pathname:ensure-directory-pathname project)))))
     ;; bin/guard with a stale socket file (the server died and left it) must fall back to a fresh guard, never wave through
     (when (probe-file stale) (delete-file stale))
     (let ((socket (make-instance 'sb-bsd-sockets:local-socket :type :stream)))
@@ -229,11 +230,8 @@ git status" nil)))
     (unwind-protect
          (progn
            (check "the stale socket file exists" (probe-file stale))
-           (check "bin/guard still refuses with a stale socket"
-                  (search "\"permissionDecision\":\"deny\""
-                          (with-input-from-string (payload (hook-json "Bash" "cat f"))
-                            (uiop:run-program (list "env" (format nil "LISP_AI_SOCKET=~a" stale) guard)
-                                              :input payload :output :string :ignore-error-status t)))))
+           (check "bin/lisp guard still refuses with a stale socket"
+            (search "\"permissionDecision\":\"deny\"" (guard-output guard stale))))
       (when (probe-file stale) (delete-file stale)))
     (run-socket-replies guard))
   (let ((text (uiop:read-file-string (merge-pathnames ".claude/settings.json" (uiop:ensure-directory-pathname project)))))
@@ -242,7 +240,7 @@ git status" nil)))
       (check-equal "the project settings lack no deny rule of the forbidden programs"
                    (set-difference want have :test #'string=) nil)
       (check-equal "and have no deny rule that is not one of theirs" (set-difference have want :test #'string=) nil))
-    (check "the project settings wire bin/guard as a PreToolUse hook on Bash"
+    (check "the project settings wire bin/lisp guard as a PreToolUse hook on Bash"
            (guard-hook-wired-p (com.inuoe.jzon:parse text)))))
 
 (defun run (directory project)

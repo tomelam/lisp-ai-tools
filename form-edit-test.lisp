@@ -1,7 +1,7 @@
-;;;; Tests of form-edit.lisp, shared by every project under ~/lisp-ai: a project's harness loads this file and calls
-;;;; (form-edit-tests:run DIRECTORY), which uses DIRECTORY for scratch files (the project's run/) and returns how many
-;;;; checks failed, printing a line for each. form-edit changes a Lisp file as forms: only the forms it is told to change are
-;;;; rewritten, and everything else, comments included, stays byte for byte.
+;;;; Tests of form-edit.lisp, shared by every project under ~/lisp-ai as part of the system lisp-ai-tools/tests: a
+;;;; project calls (form-edit-tests:run DIRECTORY), which uses DIRECTORY for scratch files (the project's run/) and returns
+;;;; how many checks failed, printing a line for each. form-edit changes a Lisp file as forms: only the forms it is told to
+;;;; change are rewritten, and everything else, comments included, stays byte for byte.
 
 (defpackage :form-edit-tests
   (:use :cl)
@@ -578,7 +578,7 @@
 
 (defun run-locations (directory)
   "After an edit the image knows where the file keeps a definition it already has, so M-. finds it. The definitions
-   are first made in the image from forms, as a request through bin/eval makes them, so they have no file. A definition
+   are first made in the image from forms, as a request through bin/lisp eval makes them, so they have no file. A definition
    the image does not have is not defined by the edit; a variable is not evaluated again; the switch turns it all off."
   (require :sb-introspect)
   (unless (find-package "SLYNK-BACKEND")
