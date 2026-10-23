@@ -206,7 +206,7 @@
 (defun refusal-message (uses forbidden)
   (let ((distinct (remove-duplicates uses :test #'string= :from-end t)))
     (format nil "Blocked: ~{~a~^, ~} ~:[is a text-processing program~;are text-processing programs~]. ~
-                 In this project, read, search and change files as Lisp forms (the REPL, bin/eval), ~
+                 In this project, read, search and change files as Lisp forms (the REPL, bin/lisp eval), ~
                  and let the Lisp printer format them. Forbidden: ~{~a~^ ~}."
             distinct (rest distinct) forbidden)))
 
@@ -233,7 +233,7 @@
   (let ((payload (handler-case (com.inuoe.jzon:parse hook-json)
                    (error () nil))))
     (if (not (hash-table-p payload))
-        "bin/guard could not read the hook payload as JSON, so it refuses the call."
+        "bin/lisp guard could not read the hook payload as JSON, so it refuses the call."
         (when (equal (gethash "tool_name" payload) "Bash")
           (let* ((input (gethash "tool_input" payload))
                  (command (and (hash-table-p input) (gethash "command" input)))
