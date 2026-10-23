@@ -10,3 +10,9 @@
   :description "Debugging in place: an error in a request from the socket is held, with its stack, and worked on by id."
   :depends-on ("sb-bsd-sockets" "sb-concurrency" "slynk")
   :components ((:file "debug")))
+
+;;; The profile of the guard and the deny list (tools/profile.lisp, docs/guard-and-deny.md). It needs only JSON, so the guard's
+;;; small system can use it.
+(defsystem "lisp-ai-tools/profile" :description
+ "Logs what the guard and the deny list decide, and whether the command ran, for each project." :depends-on
+ ("com.inuoe.jzon" "uiop") :components ((:file "profile")))
