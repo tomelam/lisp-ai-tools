@@ -202,7 +202,7 @@
   "Write the unsaved entries to run/pending.sexp, so that they can be read without the image and a crash does not lose the
    list. Without a project nothing is written."
   (ignore-errors
-   (when (or *project* (ignore-errors (project-directory)))
+   (when *project*
      (let ((file (ledger-file)))
        (ensure-directories-exist file)
        (with-open-file (out file :direction :output :if-exists :supersede :external-format :utf-8)
