@@ -11,20 +11,26 @@
 ;;;; (write-summary, into the project's data/) are meant to be committed; the log is not.
 (defpackage :lisp-ai-profile
   (:use :cl)
-  (:export #:project-directory #:profile-directory #:profiling #:shadowing #:limit #:shadow-active-p #:status
-           #:corpus #:corpus-command-p #:forbidden-programs #:loose-hits #:record-guard #:record-error #:error-count #:read-events #:entries
-           #:summary #:write-summary))
+  (:import-from :lisp-ai-project #:project-directory #:read-data)
+  (:export #:project-directory
+           #:profile-directory
+           #:profiling
+           #:shadowing
+           #:limit
+           #:shadow-active-p
+           #:status
+           #:corpus
+           #:corpus-command-p
+           #:forbidden-programs
+           #:loose-hits
+           #:record-guard
+           #:record-error
+           #:error-count
+           #:read-events
+           #:entries
+           #:summary
+           #:write-summary))
 (in-package :lisp-ai-profile)
-
-(defun system-directory (name)
-  (or (asdf:system-source-directory name) (error "profile: no ASDF system ~a" name)))
-
-(defun project-directory (project)
-  "PROJECT as a directory pathname: a pathname, a string holding a slash, or the name of an ASDF system."
-  (etypecase project
-    (pathname (uiop:ensure-directory-pathname project))
-    (string (if (find #\/ project) (uiop:ensure-directory-pathname project) (system-directory project)))
-    (symbol (system-directory (string-downcase (symbol-name project))))))
 
 (defun profile-directory (project)
   (merge-pathnames "run/profile/" (project-directory project)))
@@ -60,12 +66,6 @@
 (defun status (project)
   (list :profiling (profiling project) :shadow (shadowing project) :limit (limit project)
         :shadow-active (shadow-active-p project)))
-
-(defun read-data (project relative)
-  "The one form in the file RELATIVE of PROJECT, or NIL when there is no such file."
-  (let ((file (merge-pathnames relative (project-directory project))) (*read-eval* nil))
-    (when (probe-file file)
-      (with-open-file (in file :external-format :utf-8) (read in nil nil)))))
 
 (defun corpus (project)
   "The commands in PROJECT's rules/profile-corpus.sexp: harmless ones (/dev/null arguments, no writes), each a form of
