@@ -31,8 +31,11 @@ start_server() {
   nohup "$qlot" exec sbcl --noinform --userinit "$tools/quiet-init.lisp" --non-interactive \
     --eval "(asdf:load-asd (truename \"$system.asd\"))" \
     --load bin/serve.lisp > run/lisp-server.log 2>&1 &
+  child=$!
   waited=0
   while ! running; do
+    # a server that has already exited will never come up: say so now, not after the 60 s
+    if ! kill -0 "$child" 2>/dev/null; then echo "lisp-server exited before it came up; see run/lisp-server.log" >&2; return 1; fi
     sleep 0.5
     waited=$((waited + 1))
     if [ "$waited" -ge 120 ]; then echo "lisp-server did not come up in 60 s; see run/lisp-server.log" >&2; return 1; fi

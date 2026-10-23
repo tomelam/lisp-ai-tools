@@ -36,5 +36,7 @@
 ;;; package with RUN, and a project calls (form-edit-tests:run DIRECTORY) and so on from its own tests (docs: CLAUDE.md of the tree).
 (defsystem "lisp-ai-tools/tests" :description
  "The tests of the tools every project shares; a project calls their RUN functions." :depends-on
- ("lisp-ai-tools" "lisp-ai-tools/debug" "lisp-ai-tools/hook" "lisp-ai-tools/profile" "uiop") :components
- ((:file "form-edit-test") (:file "debug-test") (:file "profile-test") (:file "guard-test")))
+ ("lisp-ai-tools" "lisp-ai-tools/debug" "lisp-ai-tools/hook" "lisp-ai-tools/profile" "sb-posix" "sb-bsd-sockets"
+  "uiop")
+ :components
+ ((:file "form-edit-test") (:file "debug-test") (:file "profile-test") (:file "guard-test") (:file "lisp-script-test")))
