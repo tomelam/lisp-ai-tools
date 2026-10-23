@@ -1,6 +1,7 @@
-;;;; The hook: what Claude Code's PreToolUse hook for Bash prints. The guard (tools/guard.lisp) judges the command; the profiler
-;;;; (tools/profile.lisp) logs the judgement while profiling is on, and while its shadow is active lets a command through that
-;;;; the guard would deny, so that the deny list judges it too. Neither of the two knows the other: this is where they meet.
+;;;; The hook: what Claude Code's PreToolUse hook prints, for Bash and for the Edit, MultiEdit and Write tools. The guard
+;;;; (tools/guard.lisp) judges the call; the profiler (tools/profile.lisp) logs the judgement while profiling is on, and while
+;;;; its shadow is active lets a command through that the guard would deny. Neither of the two knows the other: this is where
+;;;; they meet.
 (defpackage :lisp-ai-hook
   (:use :cl)
   (:export #:hook-response #:respond #:hook-payload-p #:socket-reply #:socket-marker))

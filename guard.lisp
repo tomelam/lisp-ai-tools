@@ -1,7 +1,9 @@
-;;;; The guard: which text-processing programs does a shell command run, and the permission rules that deny them.
-;;;; Pure functions over strings, except FORBIDDEN-PROGRAMS and SYNC-DENY-RULES, which read and write a project's files.
-;;;; It knows nothing of the profiler: tools/hook.lisp puts the two together. tools/guard is the only place that touches
-;;;; stdin and exit codes.
+;;;; The guard: what a Claude Code tool call does to Lisp. A Bash command that runs a text-processing program is refused when
+;;;; it also names Lisp (a file with a Lisp suffix, or a path through a Lisp directory: rules/lisp-files.sexp); a call of the
+;;;; Edit, MultiEdit or Write tools on a Lisp file is refused, except that Write may create one. Lisp is changed as forms.
+;;;; Pure functions over strings, except FORBIDDEN-PROGRAMS and LISP-FILES, which read a project's rules, and FILE-EDIT-REFUSAL,
+;;;; which asks whether a file exists. It knows nothing of the profiler: tools/hook.lisp puts the two together. The lisp
+;;;; script (word guard) is the only place that touches stdin and exit codes.
 (defpackage :lisp-ai-guard
   (:use :cl)
   (:export #:forbidden-uses
@@ -11,10 +13,6 @@
            #:refusal-message
            #:deny-json
            #:forbidden-programs
-           #:permission-rules
-           #:settings-with-deny
-           #:sync-deny-rules
-           #:*program-directories*
            #:lisp-files
            #:lisp-names
            #:file-edit-refusal))
@@ -300,36 +298,3 @@
    come from. A missing file is an error, never an empty list."
   (lisp-ai-project:read-rules project "forbidden-programs"))
 
-(defparameter *program-directories*
-  '("/bin" "/usr/bin" "/usr/local/bin" "/opt/homebrew/bin")
-  "Where a forbidden program may be started from by its full path. Claude Code's deny rule for the plain name does not match
-   /usr/bin/sed, so each program is also denied under each of these directories. Not every place a program can live.")
-
-(defun permission-rules (forbidden)
-  "The Claude Code permission rules that deny each program in FORBIDDEN in Bash: by its name, then by its full path in each
-   of *PROGRAM-DIRECTORIES*."
-  (loop for program in forbidden
-        append
-          (cons (format nil "Bash(~a *)" program)
-                (mapcar (lambda (directory) (format nil "Bash(~a/~a *)" directory program)) *program-directories*))))
-
-(defun settings-with-deny (settings-json forbidden)
-  "SETTINGS-JSON, the text of a Claude Code settings file, with permissions.deny set to exactly the rules for FORBIDDEN.
-   Everything else in it is kept. Returns JSON text."
-  (let* ((settings (com.inuoe.jzon:parse settings-json))
-         (permissions (or (gethash "permissions" settings) (make-hash-table :test 'equal))))
-    (setf (gethash "deny" permissions) (coerce (permission-rules forbidden) 'vector)
-          (gethash "permissions" settings) permissions)
-    (com.inuoe.jzon:stringify settings :pretty t)))
-
-(defun sync-deny-rules (project)
-  "Rewrite PROJECT's .claude/settings.json so its permissions.deny lists the rules for its
-   rules/forbidden-programs.sexp. The deny list is generated: change the rules file and run this, never edit the list by
-   hand. Returns the rules."
-  (let* ((path (merge-pathnames ".claude/settings.json" (lisp-ai-project:project-directory project)))
-         (forbidden (forbidden-programs project))
-         (new (settings-with-deny (uiop/stream:read-file-string path) forbidden)))
-    (with-open-file (out path :direction :output :if-exists :supersede :external-format :utf-8)
-      (write-string new out)
-      (terpri out))
-    (permission-rules forbidden)))
