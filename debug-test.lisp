@@ -1,9 +1,9 @@
 ;;;; Tests of debug.lisp, shared by every project under ~/lisp-ai as part of the system lisp-ai-tools/tests: a project
 ;;;; calls (lisp-ai-debug-tests:run DIRECTORY START STOP), which uses DIRECTORY for the test socket (the project's run/),
 ;;;; calls (funcall START path) for a running server of the project that listens there, and (funcall STOP server) to end it.
-;;;; It returns how many checks failed, printing a line for each. The tests go through a real Unix socket as bin/eval uses
-;;;; it, so they check the project's wiring too: a held error answers at once, the commands reach the waiting thread, a
-;;;; redefinition is picked up by a restarted frame, the limits hold.
+;;;; It returns how many checks failed, printing a line for each. The tests go through a real Unix socket as bin/lisp eval
+;;;; uses it, so they check the project's wiring too: a held error answers at once, the commands reach the waiting thread,
+;;;; a redefinition is picked up by a restarted frame, the limits hold.
 
 (defpackage :lisp-ai-debug-tests
   (:use :cl)
@@ -26,7 +26,7 @@
     (format t "FAIL ~s: expected ~s, got ~s~%" label expected actual)))
 
 (defun socket-request (path text)
-  "Send TEXT to the server at PATH as bin/eval does (the write side closed after it) and return the whole reply."
+  "Send TEXT to the server at PATH as bin/lisp eval does (the write side closed after it) and return the whole reply."
   (let ((socket (make-instance 'sb-bsd-sockets:local-socket :type :stream)))
     (unwind-protect
          (progn

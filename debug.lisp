@@ -2,7 +2,7 @@
 ;;;; unwind the stack. The request's thread is kept, with its stack, inside Slynk's debugging environment, and later requests
 ;;;; work on it by id: frames, locals, evaluation in a frame, redefine a function and restart a frame, take a restart. Frames
 ;;;; belong to the thread that has them, so that thread runs each command itself and sends the answer back through a mailbox.
-;;;; A project's package uses this one (so the commands are called by their bare names through bin/eval), its EVAL-REQUEST
+;;;; A project's package uses this one (so the commands are called by their bare names through bin/lisp eval), its EVAL-REQUEST
 ;;;; calls EVAL-WITH-DEBUGGING, and its SERVE-CONNECTION binds *REPLY-NOW* with REPLY-NOW-FUNCTION.
 (defpackage :lisp-ai-debug
   (:use :cl)
@@ -14,7 +14,7 @@
   "Sessions in use at once. One more error is handled as an ordinary ERROR: reply.")
 
 (defparameter *held-timeout* 300
-  "Seconds a held thread waits for a command before its request is abandoned (the same as bin/eval's own wait).")
+  "Seconds a held thread waits for a command before its request is abandoned (the same as bin/lisp eval's own wait).")
 
 (defparameter *finished-kept* 8
   "Finished sessions whose result has not been read are kept up to this many, oldest dropped first.")

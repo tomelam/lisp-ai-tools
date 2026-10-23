@@ -578,7 +578,7 @@
 
 (defun run-locations (directory)
   "After an edit the image knows where the file keeps a definition it already has, so M-. finds it. The definitions
-   are first made in the image from forms, as a request through bin/eval makes them, so they have no file. A definition
+   are first made in the image from forms, as a request through bin/lisp eval makes them, so they have no file. A definition
    the image does not have is not defined by the edit; a variable is not evaluated again; the switch turns it all off."
   (require :sb-introspect)
   (unless (find-package "SLYNK-BACKEND")
