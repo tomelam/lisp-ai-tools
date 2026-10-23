@@ -33,7 +33,7 @@
   "What the hook prints for HOOK-JSON: the empty string to allow, a deny decision to refuse. While PROJECT's profile is on
    (tools/profile.lisp) the judgement is logged; while its shadow is active, a call the guard would deny is allowed instead,
    and logged as shadowed, if its command is in rules/profile-corpus.sexp or the limit is off."
-  (let* ((refusal (lisp-ai-guard:hook-verdict hook-json forbidden))
+  (let* ((refusal (lisp-ai-guard:hook-verdict hook-json forbidden (lisp-ai-guard:lisp-files project)))
          (command (nth-value 1 (lisp-ai-guard:hook-bash-call hook-json)))
          (shadowed (and refusal command (shadow-allows-p command project))))
     (profile-guard-call hook-json forbidden refusal shadowed project)

@@ -14,7 +14,10 @@
            #:permission-rules
            #:settings-with-deny
            #:sync-deny-rules
-           #:*program-directories*))
+           #:*program-directories*
+           #:lisp-files
+           #:lisp-names
+           #:file-edit-refusal))
 
 (in-package :lisp-ai-guard)
 
@@ -203,12 +206,59 @@
   "The programs of COMMAND (a shell command string) that are in the list FORBIDDEN, in order of appearance."
   (remove-if-not (lambda (program) (member program forbidden :test #'string=)) (command-programs command)))
 
-(defun refusal-message (uses forbidden)
+(defun lisp-files (project)
+  "What counts as Lisp for the guard: the one form in rules/lisp-files.sexp of PROJECT, a plist (:code-suffixes (\"lisp\" \"asd\") :data-suffixes (\"sexp\") :directories (\"src\" \"tests\" \"tools\")). Code is what the Edit and Write tools may not change; code and data are what a text-processing program may not read or change. A missing file is an error, never an empty rule."
+  (lisp-ai-project:read-rules project "lisp-files"))
+
+(defun command-tokens (command)
+  "The words of COMMAND, a shell command string, split at blanks, quotes and shell punctuation, here-document bodies left out. Scripts given to sh -c, and file names after a redirection, come out as words too."
+  (remove ""
+          (uiop/utility:split-string (strip-heredoc-bodies command) :separator
+                                     '(#\  #\Tab #\Newline #\; #\| #\& #\( #\) #\< #\> #\` #\' #\" #\=))
+          :test #'string=))
+
+(defun path-type (path)
+  "The suffix after the last dot of the last component of PATH, or NIL when there is none or the name only starts with a dot."
+  (let* ((name (subseq path (1+ (or (position #\/ path :from-end t) -1)))) (dot (position #\. name :from-end t)))
+    (and dot (plusp dot) (subseq name (1+ dot)))))
+
+(defun token-names-lisp-p (token lisp-files)
+  "True when TOKEN, a word of a command, names Lisp: a file with a code or data suffix of LISP-FILES, or a path with one of its directories as a component."
+  (let ((type (path-type token))
+        (components (remove "" (uiop/utility:split-string token :separator "/") :test #'string=)))
+    (and
+     (or
+      (and type
+           (member type (append (getf lisp-files :code-suffixes) (getf lisp-files :data-suffixes)) :test #'string=))
+      (intersection components (getf lisp-files :directories) :test #'string=))
+     t)))
+
+(defun lisp-names (command lisp-files)
+  "The words of COMMAND that name Lisp (token-names-lisp-p), in order, each once."
+  (remove-duplicates (remove-if-not (lambda (token) (token-names-lisp-p token lisp-files)) (command-tokens command))
+                     :test #'string= :from-end t))
+
+(defparameter *file-edit-tools*
+  '("Edit" "MultiEdit" "Write")
+  "The Claude Code tools that change a file by its path (tool_input.file_path).")
+
+(defun file-edit-refusal (tool path lisp-files)
+  "NIL if the call of TOOL on PATH may proceed, else the refusal message. Edit and MultiEdit may not change a file with a code suffix of LISP-FILES, Write may not replace one; Write may create one that does not exist. A call with no path cannot be judged and is refused."
+  (cond ((not (member tool *file-edit-tools* :test #'string=)) nil)
+        ((not (stringp path))
+         (format nil "bin/lisp guard: the ~a call has no file_path, so it cannot be judged: refused." tool))
+        ((not (member (path-type path) (getf lisp-files :code-suffixes) :test #'equal)) nil)
+        ((and (string= tool "Write") (not (probe-file path))) nil)
+        (t
+         (format nil
+                 "Blocked: ~a on the Lisp file ~a. Lisp code is changed as forms, through the image: bin/lisp eval '(form-edit::edit ...)', form-edit::edit-subform or form-edit::delete-subform. The Write tool may only create a Lisp file that does not exist yet."
+                 tool path))))
+
+(defun refusal-message (uses names forbidden)
   (let ((distinct (remove-duplicates uses :test #'string= :from-end t)))
-    (format nil "Blocked: ~{~a~^, ~} ~:[is a text-processing program~;are text-processing programs~]. ~
-                 In this project, read, search and change files as Lisp forms (the REPL, bin/lisp eval), ~
-                 and let the Lisp printer format them. Forbidden: ~{~a~^ ~}."
-            distinct (rest distinct) forbidden)))
+    (format nil
+            "Blocked: ~{~a~^, ~} ~:[is a text-processing program~;are text-processing programs~], used here on Lisp (~{~a~^, ~}). Read, search and change Lisp as forms: the REPL, bin/lisp eval, form-edit::edit, and let the Lisp printer format them. On files that are not Lisp these programs are allowed. Forbidden on Lisp: ~{~a~^ ~}."
+            distinct (rest distinct) names forbidden)))
 
 (defun deny-json (reason)
   "The Claude Code PreToolUse decision that refuses a tool call, with REASON, as a JSON string."
@@ -227,18 +277,23 @@
       (let* ((input (gethash "tool_input" payload)) (command (and (hash-table-p input) (gethash "command" input))))
         (when (stringp command) (values (gethash "tool_use_id" payload) command))))))
 
-(defun hook-verdict (hook-json forbidden)
-  "NIL if the Claude Code hook payload HOOK-JSON may proceed, else the refusal message.
-   Only Bash calls are judged. A payload that cannot be read is refused."
-  (let ((payload (handler-case (com.inuoe.jzon:parse hook-json)
-                   (error () nil))))
+(defun hook-verdict (hook-json forbidden lisp-files)
+  "NIL if the Claude Code hook payload HOOK-JSON may proceed, else the refusal message. A Bash call is refused when it runs a program of FORBIDDEN and also names Lisp (LISP-FILES); a call of Edit, MultiEdit or Write is judged by file-edit-refusal. Other tools are not judged. A payload that cannot be read is refused."
+  (let ((payload (handler-case (com.inuoe.jzon:parse hook-json) (error nil nil))))
     (if (not (hash-table-p payload))
         "bin/lisp guard could not read the hook payload as JSON, so it refuses the call."
-        (when (equal (gethash "tool_name" payload) "Bash")
-          (let* ((input (gethash "tool_input" payload))
-                 (command (and (hash-table-p input) (gethash "command" input)))
-                 (uses (and (stringp command) (forbidden-uses command forbidden))))
-            (when uses (refusal-message uses forbidden)))))))
+        (let* ((tool (gethash "tool_name" payload))
+               (input
+                (let ((input (gethash "tool_input" payload)))
+                  (and (hash-table-p input) input))))
+          (cond
+           ((equal tool "Bash")
+            (let* ((command (and input (gethash "command" input)))
+                   (uses (and (stringp command) (forbidden-uses command forbidden)))
+                   (names (and uses (lisp-names command lisp-files))))
+              (when (and uses names) (refusal-message uses names forbidden))))
+           ((member tool *file-edit-tools* :test #'equal)
+            (file-edit-refusal tool (and input (gethash "file_path" input)) lisp-files)))))))
 
 (defun forbidden-programs (project)
   "The programs named in rules/forbidden-programs.sexp of PROJECT: the one list the guard and the permission rules both
