@@ -295,7 +295,8 @@ git status" nil)))
 (defun run-socket-replies (guard)
   "bin/lisp guard trusts the image's reply only when it starts with the marker: an empty reply (a dropped connection) and
    an error text are not answers, so the guard judges the command itself; a reply with the marker is the answer. What it
-   sends is the payload with the field lisp_ai_gate_dir naming the project's directory, whose rules and gate log apply."
+   sends is the payload with the field lisp_ai_gate_dir naming the project's directory, whose rules and gate log apply,
+   in front of the payload's own fields."
   (let ((path (format nil "/tmp/lisp-ai-guard-fake-~d.sock" (sb-posix:getpid))))
     (unwind-protect
          (progn
@@ -312,8 +313,9 @@ git status" nil)))
                        (search (format nil "{\"lisp_ai_gate_dir\":~s,"
                                        (string-right-trim "/" (namestring (uiop:getcwd))))
                                *last-request*)))
-           (check "and the rest of the payload follows unchanged"
-                  (and (stringp *last-request*) (search (hook-json "Bash" "cat f.lisp") *last-request*))))
+           (check "and the payload's own fields follow unchanged"
+                  (and (stringp *last-request*)
+                       (search (subseq (hook-json "Bash" "cat f.lisp") 1) *last-request*))))
       (when (probe-file path) (delete-file path)))))
 
 (defun run-project (project)
