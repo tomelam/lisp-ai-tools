@@ -125,7 +125,12 @@ case $word in
       # Anything else (nc cannot reach the server, a dropped connection, a server that does not know hook payloads and
       # read it as Lisp) takes the slow path.
       input=$(cat)
-      if reply=$(printf '%s' "$input" | nc -w 10 -U "$socket"); then
+      # The payload goes to the image with one field in front, lisp_ai_gate_dir: this directory, whose rules and gate
+      # log apply (lisp-ai-guard:socket-reply honours it), so that a session started outside a project, which asks a
+      # project's image, is judged by its own rules and logged in its own run/gate.log. An image older than the field
+      # ignores it. A directory name that is not plain JSON (a quote or a backslash in the path) gets no reply with the
+      # marker, and the slow path judges.
+      if reply=$(printf '{"lisp_ai_gate_dir":"%s",%s' "$PWD" "${input#*\{}" | nc -w 10 -U "$socket"); then
         case $reply in
           OK:*) printf '%s' "${reply#OK:}"; exit 0 ;;
         esac
