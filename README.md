@@ -11,22 +11,24 @@ is shared by every project; a project installs it with Qlot and uses it as it is
 ## The idea in one picture
 
 ```
-   Claude Code ──▶ bin/lisp eval '(defun fish-glyph ...)'
-                        │
-                        ▼
-              ┌─────────────────────────┐   the image holds the definition
-              │   the always-on image   │   and a ledger entry: kind, name,
-              │  (SBCL on run/lisp.sock)│   package, the text as typed
-              └───────────┬─────────────┘
-                          │   (pending)  (run-tests)  (where 'name)
-                          ▼
-                  (save 'fish-glyph)         ──▶  src/aquarium.lisp   (forms spliced byte for byte)
-                          │
-                          ▼
-                  bin/lisp test              ──▶  a fresh SBCL loads the files: the arbiter
-                          │
-                          ▼
-                       commit
+  Claude Code
+       │  bin/lisp eval '(defun fish-glyph ...)'
+       ▼
+  ┌────┴───────────────────────────────────────┐
+  │ the always-on image (SBCL, run/lisp.sock)  │
+  │                                            │
+  │ holds the definition, and a ledger entry:  │
+  │ kind, name, package, the text as typed     │
+  └────┬───────────────────────────────────────┘
+       │  (pending)  (run-tests)  (where 'name)
+       ▼
+  (save 'fish-glyph)
+       │  the text as typed, spliced into src/aquarium.lisp
+       ▼
+  bin/lisp test
+       │  a fresh SBCL loads the files: the arbiter
+       ▼
+  commit
 ```
 
 Two pieces make this the easy path rather than a rule to remember:
