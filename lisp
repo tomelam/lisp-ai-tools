@@ -121,7 +121,7 @@ case $word in
     socket=${LISP_AI_SOCKET:-run/lisp.sock}
     if [ -S "$socket" ]; then
       # no exec: a stale socket file (the server died) makes nc fail with no output, and no output means "allow".
-      # The server's reply counts only when it starts with OK: (lisp-ai-hook:socket-marker); the rest is the hook's answer.
+      # The server's reply counts only when it starts with OK: (lisp-ai-guard:socket-marker); the rest is the hook's answer.
       # Anything else (nc cannot reach the server, a dropped connection, a server that does not know hook payloads and
       # read it as Lisp) takes the slow path.
       input=$(cat)
@@ -133,11 +133,13 @@ case $word in
       printf '%s' "$input" > run/guard-input.json
       exec < run/guard-input.json
     fi
+    # Allow: print nothing. Refuse: print the PreToolUse "deny" decision with the reason (lisp-ai-guard:respond).
     "$qlot" exec sbcl --noinform --non-interactive \
       --eval "(let ((*standard-output* *error-output*))
                 (asdf:load-asd (truename \"$system.asd\"))
                 (asdf:load-system \"lisp-ai-tools/guard\"))" \
-      --load "$tools/guard-main.lisp" 2>run/guard.stderr
+      --eval "(write-string (lisp-ai-guard:respond (uiop:getcwd) (uiop:slurp-input-stream :string *standard-input*)))" \
+      2>run/guard.stderr
     status=$?
     if [ "$status" -ne 0 ]; then
       echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"bin/lisp guard failed to run (exit status non-zero); see run/guard.stderr"}}'
