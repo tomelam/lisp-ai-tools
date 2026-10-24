@@ -207,6 +207,35 @@ git status" nil)))
       (check "with the log off a denial is still a denial" (denied-p (respond (hook-json "Bash" "cat x.lisp"))))
       (check-equal "and nothing more is written" (length (gate-log-lines root)) 3))))
 
+(defun json-with-gate-dir (directory json)
+  "JSON with the field lisp_ai_gate_dir naming DIRECTORY added in front, as the script adds it before asking an image."
+  (format nil "{\"lisp_ai_gate_dir\":~s,~a" (string-right-trim "/" (namestring directory))
+          (subseq json (1+ (position #\{ json)))))
+
+(defun run-gate-directory (root)
+  "A hook payload that names a directory in lisp_ai_gate_dir is judged by that directory's rules and logged in its
+   run/gate.log, not in the project's: a session started outside a project asks a running image, and the denial belongs
+   to the caller. Without the field the image's own project applies, as before. A directory that does not exist is an
+   error, not a fallback."
+  (let ((other (merge-pathnames "other/" root))
+        (before (length (gate-log-lines root))))
+    (write-file (merge-pathnames "rules/forbidden-programs.sexp" other) (format nil "(\"wc\")~%"))
+    (write-file (merge-pathnames "rules/lisp-files.sexp" other) (format nil "~s~%" *lisp-files*))
+    (flet ((reply (json) (lisp-ai-guard:socket-reply json *forbidden* root))
+           (denied-p (reply) (and (search "\"permissionDecision\":\"deny\"" reply) t)))
+      (check-equal "without the field the image's own rules apply: cat on Lisp is denied"
+                   (denied-p (reply (hook-json "Bash" "cat x.lisp"))) t)
+      (check-equal "with the field the named directory's rules apply, and cat is not in them"
+                   (reply (json-with-gate-dir other (hook-json "Bash" "cat x.lisp"))) (lisp-ai-guard:socket-marker))
+      (check-equal "and wc is" (denied-p (reply (json-with-gate-dir other (hook-json "Bash" "wc x.lisp")))) t)
+      (check-equal "the denial is logged in the named directory" (length (gate-log-lines other)) 1)
+      (check-equal "and the project's log grew only by the denial without the field"
+                   (- (length (gate-log-lines root)) before) 1)
+      (check "a directory that does not exist is an error"
+             (handler-case (progn (reply (json-with-gate-dir (merge-pathnames "nowhere/" root) (hook-json "Bash" "ls")))
+                                  nil)
+               (error () t))))))
+
 (defun guard-hook-wired-p (settings matcher)
   "True when SETTINGS (a parsed settings object) has a PreToolUse hook with the matcher MATCHER whose command ends in
    /bin/lisp guard."
@@ -233,9 +262,11 @@ git status" nil)))
                hooks))
     found))
 
+(defvar *last-request* nil "The request the last ANSWER-ONCE listener read, so a test can see what the script sent.")
+
 (defun answer-once (path reply)
   "Listen on the Unix socket PATH and answer the first connection with REPLY, after reading its request to the end, as the
-   always-on image does. Returns the thread."
+   always-on image does; the request is kept in *LAST-REQUEST*. Returns the thread."
   (when (probe-file path) (delete-file path))
   (let ((listener (make-instance 'sb-bsd-sockets:local-socket :type :stream)))
     (sb-bsd-sockets:socket-bind listener path)
@@ -246,7 +277,9 @@ git status" nil)))
             (let* ((connection (sb-bsd-sockets:socket-accept listener))
                    (stream (sb-bsd-sockets:socket-make-stream connection :input t :output t :element-type 'character
                                                                          :external-format :utf-8 :buffering :full)))
-              (loop while (read-char stream nil))
+              (setf *last-request*
+                    (with-output-to-string (text)
+                      (loop for char = (read-char stream nil) while char do (write-char char text))))
               (write-string reply stream)
               (finish-output stream)
               (close stream))
@@ -261,7 +294,8 @@ git status" nil)))
 
 (defun run-socket-replies (guard)
   "bin/lisp guard trusts the image's reply only when it starts with the marker: an empty reply (a dropped connection) and
-   an error text are not answers, so the guard judges the command itself; a reply with the marker is the answer."
+   an error text are not answers, so the guard judges the command itself; a reply with the marker is the answer. What it
+   sends is the payload with the field lisp_ai_gate_dir naming the project's directory, whose rules and gate log apply."
   (let ((path (format nil "/tmp/lisp-ai-guard-fake-~d.sock" (sb-posix:getpid))))
     (unwind-protect
          (progn
@@ -272,7 +306,14 @@ git status" nil)))
            (check "an error text is not trusted: the command is refused anyway"
                   (search "\"permissionDecision\":\"deny\"" (guard-output guard path)))
            (answer-once path (lisp-ai-guard:socket-marker))
-           (check-equal "a reply with the marker is the answer, here to allow" (guard-output guard path) ""))
+           (check-equal "a reply with the marker is the answer, here to allow" (guard-output guard path) "")
+           (check "the script names the directory whose rules and log apply, in lisp_ai_gate_dir"
+                  (and (stringp *last-request*)
+                       (search (format nil "{\"lisp_ai_gate_dir\":~s,"
+                                       (string-right-trim "/" (namestring (uiop:getcwd))))
+                               *last-request*)))
+           (check "and the rest of the payload follows unchanged"
+                  (and (stringp *last-request*) (search (hook-json "Bash" "cat f.lisp") *last-request*))))
       (when (probe-file path) (delete-file path)))))
 
 (defun run-project (project)
@@ -321,7 +362,7 @@ git status" nil)))
     (write-file (merge-pathnames "src/a.lisp" root) (format nil "(x)~%"))
     (unwind-protect
          (progn (run-guard) (run-guard-wrappers) (run-guard-structure) (run-lisp-files) (run-writers)
-                (run-file-edit directory) (run-hook root))
+                (run-file-edit directory) (run-hook root) (run-gate-directory root))
       (when (probe-file root) (uiop:delete-directory-tree root :validate t))))
   (run-project project)
   *failures*)

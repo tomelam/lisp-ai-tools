@@ -419,7 +419,29 @@
   (let ((start (position-if-not (lambda (c) (member c '(#\Space #\Tab #\Newline #\Return))) request)))
     (and start (char= (char request start) #\{))))
 
+;;; A hook payload may name the directory whose rules and gate log apply, in the field lisp_ai_gate_dir, which the
+;;; script adds before asking an image: a session started in the tree asks a running project's image, and the denial
+;;; then belongs to the tree, not to that project. Without the field the image's own project applies.
+
+(defun gate-directory (request)
+  "The directory the hook payload REQUEST names in its field lisp_ai_gate_dir, as a directory pathname, or NIL when the
+   field is absent or the payload cannot be read. A name that is no directory is an error, never a fallback to the
+   image's own rules: the caller said where the rules are."
+  (let ((payload (handler-case (com.inuoe.jzon:parse request) (error () nil))))
+    (when (hash-table-p payload)
+      (let ((name (gethash "lisp_ai_gate_dir" payload)))
+        (when (stringp name)
+          (let ((directory (uiop:ensure-directory-pathname name)))
+            (unless (uiop:directory-exists-p directory)
+              (error "gate: ~a names no directory" name))
+            directory))))))
+
 (defun socket-reply (request forbidden project)
-  "The reply to a hook payload REQUEST on the socket: the marker, then HOOK-RESPONSE with PROJECT's rules. FORBIDDEN is
-   the list of programs the server was started with."
-  (concatenate 'string *socket-marker* (hook-response request forbidden (lisp-files project) project)))
+  "The reply to a hook payload REQUEST on the socket: the marker, then HOOK-RESPONSE with the rules and the gate log of
+   the directory REQUEST names in lisp_ai_gate_dir, else of PROJECT, with FORBIDDEN as the programs the server was
+   started with."
+  (let ((directory (gate-directory request)))
+    (concatenate 'string *socket-marker*
+                 (if directory
+                     (hook-response request (forbidden-programs directory) (lisp-files directory) directory)
+                     (hook-response request forbidden (lisp-files project) project)))))
