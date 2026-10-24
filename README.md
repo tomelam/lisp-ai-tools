@@ -51,7 +51,8 @@ All in `lisp-ai-tools.asd`. A project names the ones it uses in its own `.asd`.
 
 Beside them: `lisp`, the one shell script a project's `bin/lisp` runs; `quiet-init.lisp`, SBCL's `--userinit` that
 mutes redefinition warnings about the libraries only; `qlot-setup.lisp`, Qlot's setup file pinning `cl+ssl` to
-openssl@3 on this Mac; and `sbcl-restart-frame-bug.md`, a report of an SBCL arm64 fault found on the way.
+openssl@3 on this Mac; `rules/`, the two rules files the gate reads, which a project copies; `qlfile`, so that the
+repo can run its own gate (below); and `sbcl-restart-frame-bug.md`, a report of an SBCL arm64 fault found on the way.
 
 ## How a change flows
 
@@ -141,7 +142,7 @@ What the project supplies:
   answers a hook payload (`lisp-ai-guard:hook-payload-p`) with `lisp-ai-guard:socket-reply`.
 - Its `bin/serve.lisp` loads the system, sets `*package*`, makes the package `scratch`, calls
   `(lisp-ai-bench:configure :project :<name>)` and starts the server.
-- `rules/forbidden-programs.sexp` and `rules/lisp-files.sexp`.
+- `rules/forbidden-programs.sexp` and `rules/lisp-files.sexp`, copied from `rules/` here.
 - `.claude/settings.json` wires `bin/lisp guard` as a PreToolUse hook on `Bash` and on `Edit|Write|MultiEdit`, and
   `bin/lisp start` on `SessionStart`; no `permissions.deny`.
 - `tests/shared-test.lisp` calls `(form-edit-tests:run DIRECTORY)`, `(lisp-ai-bench-tests:run DIRECTORY)`,
@@ -162,6 +163,13 @@ the inner comment was refused by name.
 
 Tests run from clean clones of a project, never against a running image someone is attached to. `bin/lisp test` in a
 project runs this repo's tests among its own.
+
+## The repo gates itself
+
+A Claude Code session started in a directory that holds this repo but is not a project (the `~/lisp-ai/` tree) has no
+image to ask, so its `.claude/settings.json` runs the gate from here: `cd tools && sh lisp lisp-ai-tools guard`, after
+one `sh lisp lisp-ai-tools qlot install` in this directory (`qlfile` names the Quicklisp dist; `.qlot/` and `run/` are
+ignored). Each call is a fresh SBCL, about 2 s, judging by the rules in `rules/` and logging denials in `run/gate.log`.
 
 ## History
 
