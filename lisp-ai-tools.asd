@@ -33,6 +33,13 @@
                "sb-introspect" "uiop")
   :components ((:file "bench")))
 
+;;; The echo (tools/echo.lisp): every request through bin/lisp eval
+;;; and its reply, shown in the Sly REPL as they happen, so that
+;;; whoever is attached with Sly watches the conversation between
+;;; Claude Code and the image. A project turns it on in bin/serve.lisp.
+(defsystem "lisp-ai-tools/echo" :description "The echo: requests and replies shown in the Sly REPL as they happen."
+ :depends-on ("lisp-ai-tools/debug" "slynk") :components ((:file "echo")))
+
 ;;; The gate (tools/guard.lisp, docs/workbench.md): the one PreToolUse
 ;;; hook, for Bash and for Edit, Write and MultiEdit. A Lisp file is
 ;;; changed only through the workbench.
@@ -49,8 +56,7 @@
 (defsystem "lisp-ai-tools/tests"
   :description
   "The tests of the shared tools; a project calls their RUN functions."
-  :depends-on ("lisp-ai-tools" "lisp-ai-tools/debug" "lisp-ai-tools/bench"
-               "lisp-ai-tools/guard" "sb-posix" "sb-bsd-sockets" "uiop")
-  :components ((:file "form-edit-test") (:file "debug-test")
-               (:file "bench-test") (:file "guard-test")
-               (:file "lisp-script-test")))
+  :depends-on ("lisp-ai-tools" "lisp-ai-tools/debug" "lisp-ai-tools/bench" "lisp-ai-tools/guard" "lisp-ai-tools/echo" "sb-posix"
+               "sb-bsd-sockets" "uiop")
+  :components ((:file "form-edit-test") (:file "debug-test") (:file "bench-test") (:file "guard-test") (:file "lisp-script-test")
+               (:file "echo-test")))

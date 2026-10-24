@@ -6,8 +6,9 @@
 ;;;; calls EVAL-WITH-DEBUGGING, and its SERVE-CONNECTION binds *REPLY-NOW* with REPLY-NOW-FUNCTION.
 (defpackage :lisp-ai-debug
   (:use :cl)
-  (:export #:eval-with-debugging #:reply-now-function #:*reply-now* #:*eval-observer* #:condition-text
-           #:debug-frames #:debug-locals #:debug-eval #:debug-result #:debug-restart-frame #:debug-invoke #:debug-abandon))
+  (:export #:eval-with-debugging #:reply-now-function #:*reply-now* #:*eval-observer* #:*request-observer* #:*request*
+   #:condition-text #:debug-frames #:debug-locals #:debug-eval #:debug-result #:debug-restart-frame #:debug-invoke
+   #:debug-abandon))
 (in-package :lisp-ai-debug)
 
 (defparameter *held-limit* 4
@@ -39,6 +40,29 @@
   (when *eval-observer*
     (handler-case (funcall *eval-observer* when form text)
       (error (e) (format reply ";; ledger: ~a~%" (condition-text e))))))
+
+(defvar *request*
+  nil
+  "The whole text of the request being evaluated, as it was sent, while EVAL-WITH-DEBUGGING runs; NIL outside it.")
+
+(defvar *request-observer*
+  nil
+  "A function called around each request: (funcall observer :request text) before its forms are evaluated, TEXT being the
+   whole request as sent, and (funcall observer :reply text) with the reply as it is sent: the finished reply, or, for an
+   error that is held, the HELD report that answers at once (the finished reply of such a request is read later through
+   DEBUG-RESULT, whose own reply is observed in turn). The echo to the Sly REPL (echo.lisp) is one. An error in the
+   observer is printed as a ;; observer: line, into the reply for :request and to *ERROR-OUTPUT* for :reply, and never
+   held.")
+
+(defun observe-request (when text reply)
+  (when *request-observer*
+    (handler-case (funcall *request-observer* when text)
+                  (error (e)
+                         (format
+                          (if (eq when :request)
+                              reply
+                              *error-output*)
+                          ";; observer: ~a~%" (condition-text e))))))
 
 (defstruct (session (:constructor make-session (id)))
   id
@@ -138,7 +162,7 @@
              (setf (session-output session) (concatenate 'string (session-output session) new-output)
                    (session-report session) report
                    (session-state session) :held)
-             (when first-time (funcall *reply-now* report)))
+             (when first-time (observe-request :reply report reply) (funcall *reply-now* report)))
            (loop
              (multiple-value-bind (command found)
                  (sb-concurrency:receive-message (session-inbox session) :timeout *held-timeout*)
@@ -167,8 +191,10 @@
   "Evaluate the forms in REQUEST in PACKAGE (a package or its name); the reply is what they print followed by one printed
    line per value. An error from the socket is held and answers at once; any other serious condition, an exhausted stack
    included, becomes a line starting ERROR: instead of a dead server. Returns the reply and, when an error was held, its
-   session (the reply was then kept for DEBUG-RESULT)."
-  (let ((reply (make-string-output-stream)) (*session* nil))
+   session (the reply was then kept for DEBUG-RESULT). *REQUEST-OBSERVER* sees the request first and the reply as it is
+   sent."
+  (let ((reply (make-string-output-stream)) (*session* nil) (*request* request))
+    (observe-request :request request reply)
     (handler-case
      (restart-case (handler-bind ((error (lambda (condition) (hold-error condition reply))))
                      (let ((*package* (find-package package)) (*standard-output* reply) (*error-output* reply))
@@ -176,19 +202,27 @@
                          (loop with start = 0
                                for form = (read forms nil forms)
                                until (eq form forms)
-                               do (let* ((end (file-position forms))
-                                         (text (subseq request start (min end (length request)))))
-                                    (observe :before form text reply)
-                                    (let ((values (multiple-value-list (eval form))))
-                                      (observe :after form text reply)
-                                      (dolist (value values) (format reply "~s~%" value)))
-                                    (setf start end))))))
+                               do
+                                 (let* ((end (file-position forms))
+                                        (text (subseq request start (min end (length request)))))
+                                   (observe :before form text reply)
+                                   (let ((values (multiple-value-list (eval form))))
+                                     (observe :after form text reply)
+                                     (dolist (value values) (format reply "~s~%" value)))
+                                   (setf start end))))))
        (abort-request (&optional condition) :report
         "Unwind the request and reply with the error, as without debugging."
         (format reply "ERROR: ~a~%" (condition-text (or condition (session-condition *session*))))))
      (serious-condition (condition) (format reply "ERROR: ~a~%" (condition-text condition))))
-    (let ((text (concatenate 'string (if *session* (session-output *session*) "") (get-output-stream-string reply))))
-      (when *session* (finish-session *session* text))
+    (let ((text
+           (concatenate 'string
+                        (if *session*
+                            (session-output *session*)
+                            "")
+                        (get-output-stream-string reply))))
+      (if *session*
+          (finish-session *session* text)
+          (observe-request :reply text reply))
       (values text *session*))))
 
 (defun reply-now-function (stream connection)
