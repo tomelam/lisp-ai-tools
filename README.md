@@ -167,9 +167,12 @@ project runs this repo's tests among its own.
 ## The repo gates itself
 
 A Claude Code session started in a directory that holds this repo but is not a project (the `~/lisp-ai/` tree) has no
-image to ask, so its `.claude/settings.json` runs the gate from here: `cd tools && sh lisp lisp-ai-tools guard`, after
-one `sh lisp lisp-ai-tools qlot install` in this directory (`qlfile` names the Quicklisp dist; `.qlot/` and `run/` are
-ignored). Each call is a fresh SBCL, about 2 s, judging by the rules in `rules/` and logging denials in `run/gate.log`.
+image of its own, so its `.claude/settings.json` runs the gate from here: `cd tools && sh lisp lisp-ai-tools guard`,
+after one `sh lisp lisp-ai-tools qlot install` in this directory (`qlfile` names the Quicklisp dist; `.qlot/` and `run/`
+are ignored). The judgement uses the rules in `rules/` and logs denials in `run/gate.log` here. With `LISP_AI_SOCKET`
+set to a running project image's socket (the tree's hook picks the first it finds) the image answers in about 40 ms:
+the script puts the field `lisp_ai_gate_dir`, this directory, in front of the payload, and `socket-reply` judges by that
+directory's rules and logs there, not in the image's own project. When no image answers, a fresh SBCL judges, about 2 s.
 
 ## History
 
