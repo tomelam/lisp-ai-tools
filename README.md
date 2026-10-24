@@ -47,6 +47,7 @@ All in `lisp-ai-tools.asd`. A project names the ones it uses in its own `.asd`.
 | `lisp-ai-tools/debug` | `lisp-ai-debug` | `debug.lisp` | **Debugging in place.** An error in a `bin/lisp eval` request is not unwound: the reply comes at once as `HELD n` with the restarts and the frames, and the failing thread waits. Commands: `debug-locals`, `debug-eval`, `debug-restart-frame`, `debug-invoke`, `debug-abandon`. Also the eval loop, with the observer the workbench records through. |
 | `lisp-ai-tools/bench` | `lisp-ai-bench` | `bench.lisp` | **The workbench.** The ledger of definitions made in the image, with the text as typed; `pending`, `save`, `save-all`, `drop`, `where`, `run-tests`, `new-file`, `add-component`. |
 | `lisp-ai-tools/guard` | `lisp-ai-guard` | `guard.lisp` | **The gate.** The one Claude Code PreToolUse hook, for `Bash` and for `Edit`, `Write` and `MultiEdit`. The image answers hook payloads on its socket with the marker `OK:`. |
+| `lisp-ai-tools/echo` | `lisp-ai-echo` | `echo.lisp` | **The echo.** Every request that comes through `bin/lisp eval`, as typed, after the prompt `claude>`, and then its reply, written into the Sly REPL as they happen: whoever is attached with Sly watches the conversation between Claude Code and the image, while the source file moves only at `save`. The script's own probes (is the image alive, what is unsaved) are not shown. `(lisp-ai-echo:start)` in a project's `bin/serve.lisp` turns it on; it hangs on `lisp-ai-debug:*request-observer*`, which sees each request before it runs and each reply as it is sent. |
 | `lisp-ai-tools/tests` | one package per file | `*-test.lisp` | The tests of all the above. A project runs them from its own suite by calling each package's `run`. |
 
 Beside them: `lisp`, the one shell script a project's `bin/lisp` runs; `quiet-init.lisp`, SBCL's `--userinit` that
@@ -146,8 +147,11 @@ What the project supplies:
 - `.claude/settings.json` wires `bin/lisp guard` as a PreToolUse hook on `Bash` and on `Edit|Write|MultiEdit`, and
   `bin/lisp start` on `SessionStart`; no `permissions.deny`.
 - `tests/shared-test.lisp` calls `(form-edit-tests:run DIRECTORY)`, `(lisp-ai-bench-tests:run DIRECTORY)`,
-  `(lisp-ai-guard-tests:run DIRECTORY PROJECT)`, `(lisp-ai-debug-tests:run DIRECTORY START STOP)` and
-  `(lisp-ai-script-tests:run DIRECTORY START STOP)`. The shared tests fail when any of the above is missing.
+  `(lisp-ai-guard-tests:run DIRECTORY PROJECT)`, `(lisp-ai-debug-tests:run DIRECTORY START STOP)`,
+  `(lisp-ai-script-tests:run DIRECTORY START STOP)` and, when the project uses the echo,
+  `(lisp-ai-echo-tests:run DIRECTORY START STOP)`. The shared tests fail when any of the above is missing.
+- To show the conversation in the Sly REPL: `lisp-ai-tools/echo` among the dependencies and `(lisp-ai-echo:start)` in
+  `bin/serve.lisp`, after Slynk is started.
 
 Two projects use it today: `aquarium`, a demo tank of fish drawn as text once a second and changed while it runs, and
 `code-as-data`. Their `CLAUDE.md` files and the tree's `docs/workbench.md` hold the full method.
