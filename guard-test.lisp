@@ -288,13 +288,16 @@ git status" nil)))
       (sb-bsd-sockets:socket-close socket))
     (unwind-protect
          (progn
-           (check "the stale socket file exists" (probe-file stale))
-           (check "bin/lisp guard still refuses with a stale socket"
-                  (search "\"permissionDecision\":\"deny\"" (guard-output guard stale)))
-           (check "and refuses an Edit of a Lisp file the same way"
-                  (search "\"permissionDecision\":\"deny\""
-                          (guard-output guard stale
-                                        (file-edit-json "Edit" (namestring (merge-pathnames "src/x.lisp" (uiop/pathname:ensure-directory-pathname project))))))))
+          (check "the stale socket file exists" (probe-file stale))
+          (check "bin/lisp guard still refuses with a stale socket"
+           (search "\"permissionDecision\":\"deny\"" (guard-output guard stale)))
+          (check "and refuses an Edit of a Lisp file the same way"
+           (search "\"permissionDecision\":\"deny\""
+                   (guard-output guard stale
+                    (file-edit-json "Edit"
+                     (namestring (merge-pathnames "src/x.lisp" (uiop/pathname:ensure-directory-pathname project)))))))
+          (check "and allows a command that names no Lisp: the fallback judges, it does not deny everything"
+           (string= "" (guard-output guard stale (hook-json "Bash" "wc -l qlfile")))))
       (when (probe-file stale) (delete-file stale)))
     (run-socket-replies guard))
   (let ((settings (com.inuoe.jzon:parse
