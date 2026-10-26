@@ -110,7 +110,7 @@ from a directory name, so a project clones anywhere.
 
 | Word | Does |
 | --- | --- |
-| `eval '(form)'` | Evaluate in the always-on image, in the project's package; print the values. Starts the image if it is down. One form per call. |
+| `eval '(form)' ...` | Evaluate each argument in turn in the always-on image, in the project's package; print the values of each. Starts the image if it is down. No argument is a usage error. |
 | `start` / `stop` / `status` | The always-on image: loads the project's `bin/serve.lisp`, answers on `run/lisp.sock`, serves Slynk. `stop` refuses while anything is unsaved and waits until the process has exited. |
 | `test` | Load the system fresh in a new SBCL and run `test-op` on `<name>/tests`. The arbiter. The loader's warnings go to `run/test.stderr`. |
 | `guard` | The hook. Reads the hook JSON on stdin, asks the image first (about 30 ms), judges in a fresh SBCL when the image does not answer (about 2 s), denies if that fails. |
