@@ -2,15 +2,19 @@
 ;;;; Write tools (bin/lisp guard). Lisp is changed in the image and saved from it (lisp-ai-bench), so the gate refuses
 ;;;; every other way of changing a Lisp file: Edit and MultiEdit of one, Write over one that exists, a shell command that
 ;;;; writes one (a redirection, tee, cp, mv, install, ln, rsync, dd), and a text-processing program (rules/
-;;;; forbidden-programs.sexp) used on Lisp (a file with a Lisp suffix, or a path through a Lisp directory:
-;;;; rules/lisp-files.sexp). Everything else is allowed: wc on a log, jq on JSON, grep on markdown. Each denial is one
-;;;; line in the project's run/gate.log; nothing else is recorded and there are no switches.
+;;;; forbidden-programs.sexp) used on Lisp: one whose own arguments name a file with a Lisp suffix or a path through a
+;;;; Lisp directory (rules/lisp-files.sexp). Each simple command is judged by its own words: what another program on the
+;;;; same line names, and the Lisp text given to bin/lisp eval, are not the shell's business. Everything else is allowed:
+;;;; wc on a log, jq on JSON, grep on markdown, head on the image's reply. Each denial is one line in the project's
+;;;; run/gate.log; nothing else is recorded and there are no switches.
 ;;;; Pure functions over strings, except FORBIDDEN-PROGRAMS and LISP-FILES (a project's rules), FILE-EDIT-REFUSAL (does a
 ;;;; file exist) and LOG-DENIAL. The script lisp (word guard) is the only place that touches stdin and exit codes.
 (defpackage :lisp-ai-guard
   (:use :cl)
   (:export #:forbidden-uses
+           #:forbidden-uses-on-lisp
            #:command-programs
+           #:command-commands
            #:lisp-names
            #:written-lisp-files
            #:file-edit-refusal
@@ -157,22 +161,6 @@
                  (setf words (and end (nthcdr (1+ end) words))))))
     (nreverse commands)))
 
-(defun segment-programs (words)
-  "Every program a simple command runs: its own, and those in a script it gives to a shell or eval, and those find
-   runs with -exec."
-  (multiple-value-bind (base rest)
-      (unwrap words)
-    (when base
-      (cons base
-            (cond
-             ((member base *shells* :test #'string=)
-              (let ((script (shell-command-string rest)))
-                (and script (command-programs script))))
-             ((string= base "eval") (command-programs (format nil "~{~a~^ ~}" rest)))
-             ((string= base "find")
-              (loop for command in (find-exec-commands rest)
-                    append (segment-programs command))))))))
-
 (defun double-quoted-substitutions (command)
   "The texts of the $(...) and backtick substitutions that sit inside double quotes in COMMAND, outermost first. The splitter
    does not look inside double quotes, so COMMAND-PROGRAMS reads these separately. Text in single quotes and here-document
@@ -199,14 +187,37 @@
               (incf i)))
     (nreverse found)))
 
-(defun command-programs (command)
-  "The programs of COMMAND (a shell command string): those of its simple commands in order of appearance, then those inside
-   $(...) and backticks within double quotes."
+(defun segment-commands (words)
+  "Every simple command that WORDS (one simple command, quoting removed) runs, each as (program . arguments): its own,
+   those in a script it gives to a shell or to eval, and those find runs with -exec. A command find runs also carries
+   find's own arguments, which say where it looks."
+  (multiple-value-bind (base rest)
+      (unwrap words)
+    (when base
+      (cons (cons base rest)
+            (cond
+             ((member base *shells* :test #'string=)
+              (let ((script (shell-command-string rest)))
+                (and script (command-commands script))))
+             ((string= base "eval") (command-commands (format nil "~{~a~^ ~}" rest)))
+             ((string= base "find")
+              (loop for command in (find-exec-commands rest)
+                    append
+                      (loop for (program . arguments) in (segment-commands command)
+                            collect (cons program (append arguments rest))))))))))
+
+(defun command-commands (command)
+  "The simple commands of COMMAND (a shell command string), each as (program . arguments), in order of appearance, then
+   those inside $(...) and backticks within double quotes."
   (append
    (loop for words in (split-simple-commands command)
-         append (segment-programs words))
+         append (segment-commands words))
    (loop for inner in (double-quoted-substitutions command)
-         append (command-programs inner))))
+         append (command-commands inner))))
+
+(defun command-programs (command)
+  "The programs of COMMAND (a shell command string), in order of appearance."
+  (mapcar #'car (command-commands command)))
 
 (defun forbidden-uses (command forbidden)
   "The programs of COMMAND (a shell command string) that are in the list FORBIDDEN, in order of appearance."
@@ -221,13 +232,14 @@
    missing file is an error, never an empty rule."
   (lisp-ai-project:read-rules project "lisp-files"))
 
-(defun command-tokens (command)
-  "The words of COMMAND, a shell command string, split at blanks, quotes and shell punctuation, here-document bodies left
-   out. Scripts given to sh -c, and file names after a redirection, come out as words too."
-  (remove ""
-          (uiop:split-string (strip-heredoc-bodies command)
-                             :separator '(#\Space #\Tab #\Newline #\; #\| #\& #\( #\) #\< #\> #\` #\' #\" #\=))
-          :test #'string=))
+(defparameter *word-separators*
+  (concatenate 'string " " (string #\Tab) (string #\Newline) ";|&()<>`'\"=")
+  "Where a word is cut into pieces: blanks, the shell's punctuation, quotes, parentheses and the = of an assignment.")
+
+(defun word-tokens (word)
+  "The pieces of WORD, an argument of a simple command with its quoting removed, cut at *WORD-SEPARATORS*, so that a file
+   named inside a script given with -c, or after a redirection written as one word (<src/x.lisp), is a piece of its own."
+  (remove "" (uiop/utility:split-string word :separator *word-separators*) :test #'string=))
 
 (defun path-type (path)
   "The suffix after the last dot of the last component of PATH, or NIL when there is none or the name only starts with a dot."
@@ -253,10 +265,23 @@
              t)
         (in-lisp-directory-p token lisp-files))))
 
-(defun lisp-names (command lisp-files)
-  "The words of COMMAND that name Lisp (token-names-lisp-p), in order, each once."
-  (remove-duplicates (remove-if-not (lambda (token) (token-names-lisp-p token lisp-files)) (command-tokens command))
-                     :test #'string= :from-end t))
+(defun lisp-names (arguments lisp-files)
+  "The words among ARGUMENTS (those of one simple command, quoting removed) that name Lisp (token-names-lisp-p), in order,
+   each once. A word is looked at whole and, when the whole does not name Lisp, in its pieces (word-tokens)."
+  (remove-duplicates
+   (loop for word in arguments
+         when (token-names-lisp-p word lisp-files) collect word else append
+           (remove-if-not (lambda (token) (token-names-lisp-p token lisp-files)) (word-tokens word)))
+   :test #'string= :from-end t))
+
+(defun forbidden-uses-on-lisp (command forbidden lisp-files)
+  "The simple commands of COMMAND (a shell command string) that run a program of FORBIDDEN on Lisp, each as
+   (program . names): NAMES are the words of that command's own arguments that name Lisp (LISP-FILES). A forbidden
+   program whose own arguments name no Lisp is not among them, whatever the rest of the line names: the file another
+   program in the pipeline reads, a directory ls lists, the text of a form given to bin/lisp eval."
+  (loop for (program . arguments) in (command-commands command)
+        for names = (and (member program forbidden :test #'string=) (lisp-names arguments lisp-files))
+        when names collect (cons program names)))
 
 (defparameter *file-writers* '("cp" "mv" "install" "ln" "rsync")
   "Programs whose last word names the file or directory they write.")
@@ -340,24 +365,33 @@
 
 (defun hook-verdict (hook-json forbidden lisp-files)
   "NIL if the Claude Code hook payload HOOK-JSON may proceed, else the refusal message. A Bash call is refused when it
-   would write a Lisp code file, or runs a program of FORBIDDEN and also names Lisp (LISP-FILES); a call of Edit,
-   MultiEdit or Write is judged by FILE-EDIT-REFUSAL. Other tools are not judged. A payload that cannot be read is refused."
-  (let ((payload (handler-case (com.inuoe.jzon:parse hook-json) (error () nil))))
+   would write a Lisp code file, or when one of its simple commands runs a program of FORBIDDEN whose own arguments name
+   Lisp (LISP-FILES); a call of Edit, MultiEdit or Write is judged by FILE-EDIT-REFUSAL. Other tools are not judged. A
+   payload that cannot be read is refused."
+  (let ((payload (ignore-errors (com.inuoe.jzon:parse hook-json))))
     (if (not (hash-table-p payload))
         "bin/lisp guard could not read the hook payload as JSON, so it refuses the call."
         (let* ((tool (gethash "tool_name" payload))
-               (input (let ((input (gethash "tool_input" payload))) (and (hash-table-p input) input))))
-          (cond ((equal tool "Bash")
-                 (let ((command (and input (gethash "command" input))))
-                   (when (stringp command)
-                     (let ((written (written-lisp-files command lisp-files)))
-                       (if written
-                           (writer-message written)
-                           (let* ((uses (forbidden-uses command forbidden))
-                                  (names (and uses (lisp-names command lisp-files))))
-                             (when (and uses names) (refusal-message uses names forbidden))))))))
-                ((member tool *file-edit-tools* :test #'equal)
-                 (file-edit-refusal tool (and input (gethash "file_path" input)) lisp-files)))))))
+               (input
+                (let ((input (gethash "tool_input" payload)))
+                  (and (hash-table-p input) input))))
+          (cond
+           ((equal tool "Bash")
+            (let ((command (and input (gethash "command" input))))
+              (when (stringp command)
+                (let ((written (written-lisp-files command lisp-files)))
+                  (if written
+                      (writer-message written)
+                      (let ((uses (forbidden-uses-on-lisp command forbidden lisp-files)))
+                        (when uses
+                          (refusal-message (mapcar #'car uses)
+                           (remove-duplicates
+                            (loop for use in uses
+                                  append (cdr use))
+                            :test #'string= :from-end t)
+                           forbidden))))))))
+           ((member tool *file-edit-tools* :test #'equal)
+            (file-edit-refusal tool (and input (gethash "file_path" input)) lisp-files)))))))
 
 (defun deny-json (reason)
   "The Claude Code PreToolUse decision that refuses a tool call, with REASON, as a JSON string."
