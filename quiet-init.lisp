@@ -43,3 +43,10 @@
 (setf sb-ext:*muffled-warnings*
         '(or sb-kernel:uninteresting-redefinition
              (and sb-kernel:redefinition-warning (satisfies library-redefinition-p))))
+
+;;;; SBCL opens /dev/tty for *terminal-io* when it can, so *debug-io* and *query-io* reach the window the process was
+;;;; started from, past every redirection of stdout and stderr, held in a line buffer until a newline or the exit. Slynk's
+;;;; system definition writes "SLYNK's ASDF loader finished." there with no newline: it sat on the hackathon's terminal
+;;;; at each image stop and each bin/lisp test (2026-10-26). Here the terminal is stdin and stderr, so such a line goes
+;;;; where the warnings go: the server's log, test.stderr.
+(setf *terminal-io* (make-two-way-stream sb-sys:*stdin* sb-sys:*stderr*))
