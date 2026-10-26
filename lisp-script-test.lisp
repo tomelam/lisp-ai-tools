@@ -43,8 +43,13 @@
   '(": > run/started" "echo $$ > run/lisp.pid" "sleep 60")
   "A stand-in start: note that it ran, record the pid of this process as the server's, and stay alive.")
 
-(defun eval-command (qlot)
-  (list "env" (format nil "QLOT=~a" qlot) "sh" *script* "scratch" "eval" "(* 6 7)"))
+(defun eval-command (qlot &rest forms)
+  "The script's word eval with FORMS as its arguments, (* 6 7) when none are given."
+  (list* "env" (format nil "QLOT=~a" qlot) "sh" *script* "scratch" "eval" (or forms (list "(* 6 7)"))))
+
+(defun eval-command-bare (qlot)
+  "The script's word eval with no form at all."
+  (list "env" (format nil "QLOT=~a" qlot) "sh" *script* "scratch" "eval"))
 
 (defun run-eval (top start stop)
   (let* ((root (concatenate 'string top "project/"))
@@ -71,7 +76,20 @@
                (check-equal "eval of a healthy server prints the value" out (format nil "42~%"))
                (check-equal "eval of a healthy server says nothing on stderr" err "")
                (check-equal "eval of a healthy server exits 0" code 0)
-               (check "eval of a healthy server starts nothing" (not (marker "started"))))
+               (progn
+                (check "eval of a healthy server starts nothing" (not (marker "started")))
+                (multiple-value-bind (out err code)
+                    (uiop/run-program:run-program (eval-command qlot "(* 6 7)" "(+ 1 2)") :directory root :output :string
+                                                  :error-output :string :ignore-error-status t)
+                  (check-equal "eval with two forms prints both values, in order" out (format nil "42~%3~%"))
+                  (check-equal "eval with two forms says nothing on stderr" err "")
+                  (check-equal "eval with two forms exits 0" code 0))
+                (multiple-value-bind (out err code)
+                    (uiop/run-program:run-program (eval-command-bare qlot) :directory root :output :string :error-output :string
+                                                  :ignore-error-status t)
+                  (check-equal "eval with no form prints nothing" out "")
+                  (check-equal "eval with no form exits 2" code 2)
+                  (check "eval with no form says usage" (search "usage" err)))))
           (funcall stop server)))
       ;; 2: a server that is down, with a stale socket left behind, is started, and then answers
       (tree *fake-start-and-wait*)

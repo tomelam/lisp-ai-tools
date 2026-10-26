@@ -3,7 +3,8 @@
 # the project's directory (the current directory is the project) and runs this script, which Qlot installed inside the project
 # (.qlot/dists/lisp-ai-tools/software/), with the name of the project's ASDF system. Nothing here derives a name or a path
 # from a directory name; shared files are taken from the directory of this script.
-#   eval '(form)'     evaluate in the project's always-on image, started first when it is down; print the values
+#   eval '(form)' ... evaluate each argument in turn in the project's always-on image, started first when it is down;
+#                     print the values of each
 #   start|stop|status the always-on image (loads bin/serve.lisp, answers on run/lisp.sock); stop refuses while the image
 #                     holds definitions no file holds (lisp-ai-bench), stop --discard does not
 #   test              load the system fresh and run ASDF test-op on SYSTEM/tests
@@ -94,12 +95,18 @@ stop_server() {
 
 case $word in
   eval)
+    # Each argument is one request, sent in turn; the values of each are printed in order. No argument is a usage
+    # error, not a silent no-op. (Before 2026-10-26 only the first argument was sent and the rest were dropped without a
+    # word, which cost the hackathon's Lisp team three calls in a race.)
+    if [ $# -eq 0 ]; then echo "usage: bin/lisp eval '(form)' ['(form)' ...]" >&2; exit 2; fi
     # A server that is down (a stale socket counts as down) is started first, and stderr says so.
     if ! state=$(status_server 2>&1); then
       echo "lisp-server was down ($state); starting it" >&2
       start_server >&2 || { echo "lisp-server could not be started; see run/lisp-server.log" >&2; exit 1; }
     fi
-    printf '%s' "$1" | nc -w 300 -U "$socket" || { echo "no answer from lisp-server on $socket" >&2; exit 1; }
+    for request in "$@"; do
+      printf '%s' "$request" | nc -w 300 -U "$socket" || { echo "no answer from lisp-server on $socket" >&2; exit 1; }
+    done
     ;;
   start) start_server ;;
   stop) stop_server "$1" ;;
