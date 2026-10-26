@@ -92,12 +92,14 @@ What counts as Lisp is data in each project's `rules/lisp-files.sexp`:
 | Edit or MultiEdit of a `.lisp` or `.asd` file | Edit of prose, JSON, settings, `rules/*.sexp` |
 | Write over a Lisp file that exists | Write of a new Lisp file (`new-file` is the better way) |
 | `>`, `>>`, `tee`, `cp`, `mv`, `install`, `ln`, `rsync`, `dd` into a Lisp file, whatever runs them | The same into anything else |
-| A program of `rules/forbidden-programs.sexp` (`cat`, `sed`, `grep`, `awk`, `wc`, `python`, ...) **on Lisp** | The same programs on a log, JSON, markdown |
+| A program of `rules/forbidden-programs.sexp` (`cat`, `sed`, `grep`, `awk`, `wc`, `python`, ...) **on Lisp**: its own arguments name a Lisp file or a Lisp directory | The same programs on a log, JSON, markdown, and on the reply of a command that names Lisp (`bin/lisp eval '...' \| head`) |
 | A hook payload it cannot read, or an Edit with no `file_path` | |
 
 The gate looks through `sudo`, `env`, `nice`, `timeout`, `xargs`, `sh -c`, `eval`, `find -exec`, shell keywords and
-`$(...)` inside double quotes. Every denial is one line in the project's `run/gate.log`: time, tool, what was refused,
-why. The messages say what to do instead. There are no deny lists, no switches, and nothing else is recorded. The gate
+`$(...)` inside double quotes. Each simple command is judged by its own arguments: in `cat TASK.md; ls src` the `cat` is
+on prose, and the Lisp text given to `bin/lisp eval` is the image's business, not the shell's; a program `find -exec`
+runs is judged with `find`'s own arguments too. Every denial is one line in the project's `run/gate.log`: time, tool,
+what was refused, why. The messages say what to do instead. There are no deny lists, no switches, and nothing else is recorded. The gate
 catches habit, not intent: a Lisp form can still run a program, so the rule has to hold without it.
 
 ## `bin/lisp`

@@ -39,7 +39,10 @@
 (defun verdict (json) (lisp-ai-guard:hook-verdict json *forbidden* *lisp-files*))
 
 (defun hook-json (tool command)
-  (format nil "{\"tool_name\":~s,\"tool_input\":{\"command\":~s}}" tool command))
+  "A Claude Code hook payload for a call of TOOL with COMMAND, as JSON: a newline in COMMAND (a here-document) is escaped,
+   as Claude Code escapes it."
+  (format nil "{\"tool_name\":~a,\"tool_input\":{\"command\":~a}}" (com.inuoe.jzon:stringify tool)
+          (com.inuoe.jzon:stringify command)))
 
 (defun file-edit-json (tool path)
   (format nil "{\"tool_name\":~s,\"tool_input\":{\"file_path\":~s}}" tool path))
@@ -111,20 +114,44 @@ git status" nil)))
          (member "sed" (uses "echo \"x $(echo \"$(sed p f)\")\"") :test #'string=)))
 
 (defun run-lisp-files ()
-  "A forbidden program is refused only when the command also names Lisp: a file with a code or data suffix, or a path
-   through one of the Lisp directories. On any other file it is allowed. Each row is a command and whether it is refused."
+  "A forbidden program is refused only when its own arguments name Lisp: a file with a code or data suffix, or a path
+   through one of the Lisp directories. On any other file it is allowed, and so is a forbidden program whose arguments
+   name no Lisp, whatever else the line names: another command of the pipeline, a directory ls lists, the text of a form
+   given to bin/lisp eval. Each row is a command and whether it is refused."
   (dolist
       (row
        '(("sed -i s/a/b/ src/x.lisp" t) ("cat x.asd" t) ("cat data/t.sexp" t) ("grep -r foo src" t)
-         ("grep foo ./tests/a" t) ("git diff -- a.lisp | head -5" t) ("sh -c 'sed p x.lisp'" t)
-         ("python3 -c 'print(open(\"x.lisp\").read())'" t) ("wc -l run/test.stderr" nil) ("jq . report.json" nil)
+         ("grep foo ./tests/a" t) ("sh -c 'sed p x.lisp'" t) ("sh -c 'cat x.lisp' | head -1" t)
+         ("python3 -c 'print(open(\"x.lisp\").read())'" t) ("sed p < src/x.lisp" t) ("head <src/x.lisp" t)
+         ("cat notes.md | grep x src/a.lisp" t) ("find src -name '*.lisp' -exec cat {} +" t)
+         ("echo \"$(cat src/a.lisp)\"" t) ("wc -l run/test.stderr" nil) ("jq . report.json" nil)
          ("git status | head" nil) ("sort names.txt" nil) ("cat notes.md" nil) ("grep foo docs/a.md" nil)
          ("diff a.txt b.txt" nil) ("echo x.lisp" nil) ("ls src tests" nil) ("cat tests-output.txt" nil)
-         ("sed p lisp" nil)))
-    (destructuring-bind (command refused) row
+         ("sed p lisp" nil) ("find docs -name '*.md' -exec cat {} +" nil) ("cat TASK.md; ls src tests" nil)
+         ("git diff -- a.lisp | head -5" nil)
+         ("bin/lisp eval '(princ (uiop:read-file-string \"src/x.lisp\"))' | head -12" nil)
+         ("bin/lisp eval '(asdf:load-system \"hackathon/tests\")' 2>&1 | head -5" nil)
+         ("bin/lisp eval '(x)'; git status; tasks/t/report f.csv | wc -c" nil)
+         ("bin/lisp eval \"$(cat <<'EOF'
+(defun f () (load \"src/x.lisp\"))
+EOF
+)\""
+          nil)))
+    (destructuring-bind
+        (command refused)
+        row
       (check-equal command (and (verdict (hook-json "Bash" command)) t) refused)))
   (check "the refusal names the Lisp file" (search "x.lisp" (verdict (hook-json "Bash" "cat x.lisp"))))
-  (check "and says other files are allowed" (search "not Lisp" (verdict (hook-json "Bash" "cat x.lisp")))))
+  (check "and says other files are allowed" (search "not Lisp" (verdict (hook-json "Bash" "cat x.lisp"))))
+  (check "the refusal names only the files of the program refused"
+   (let ((refusal (verdict (hook-json "Bash" "bin/lisp eval '(load \"src/y.lisp\")'; cat src/x.lisp"))))
+     (and refusal (search "src/x.lisp" refusal) (not (search "src/y.lisp" refusal)))))
+  (check-equal "forbidden-uses-on-lisp pairs each program with its own Lisp names"
+   (lisp-ai-guard:forbidden-uses-on-lisp "cat a.lisp; ls src; grep x tests/b.lisp" *forbidden* *lisp-files*)
+   '(("cat" "a.lisp") ("grep" "tests/b.lisp")))
+  (check-equal "command-commands keeps each program with its arguments"
+   (lisp-ai-guard:command-commands "ls src | head -1; sh -c 'cat f'")
+   '(("ls" "src") ("head" "-1") ("sh" "-c" "cat f") ("cat" "f"))))
 
 (defun run-writers ()
   "A shell command that would write a Lisp code file is refused whatever program runs it: a redirection into one, tee,
