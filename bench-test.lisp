@@ -51,7 +51,8 @@
 (defun sym (name) (intern name :cl-user))
 
 (defparameter *names*
-  '("BENCH-TEST-F" "BENCH-TEST-G" "BENCH-TEST-H" "BENCH-TEST-Z" "BENCH-TEST-Y" "BENCH-TEST-M" "*BENCH-TEST-V*"))
+  '("BENCH-TEST-F" "BENCH-TEST-G" "BENCH-TEST-H" "BENCH-TEST-Z" "BENCH-TEST-Y" "BENCH-TEST-M" "*BENCH-TEST-V*"
+    "BENCH-TEST-P" "BENCH-TEST-Q"))
 
 (defun forms-of (path)
   (let ((*package* (find-package :cl-user)) (*read-eval* nil))
@@ -161,6 +162,36 @@
                                                      (search ":string" text)))
       (check-equal "the file still reads as nine forms" (length (forms-of source)) 9))))
 
+(defun run-progn (root)
+  "Definitions sent inside one top-level progn are recorded one by one, each with its own text, the comment lines above
+   it included and the progn's indentation removed; save-all writes them as if typed on their own. A progn whose forms
+   cannot be matched to its text is refused, and nothing is recorded."
+  (let ((source (merge-pathnames "src/t.lisp" root)))
+    (evaluate "(progn
+  ;; p first
+  (defun bench-test-p () 1)
+  (defun bench-test-q ()
+    (bench-test-p))
+  (bench-test-q))")
+    (check-equal "both definitions are pending, in order" (mapcar #'second (lisp-ai-bench:pending))
+     (list (sym "BENCH-TEST-P") (sym "BENCH-TEST-Q")))
+    (check-equal "each has its own text: p with the comment above it, both at the margin, q keeping its inner indentation"
+     (mapcar #'lisp-ai-bench::entry-text (lisp-ai-bench::entries))
+     (list (format nil ";; p first~%(defun bench-test-p () 1)") (format nil "(defun bench-test-q ()~%  (bench-test-p))")))
+    (check-equal "save-all writes both" (length (lisp-ai-bench:save-all :file "src/t.lisp")) 2)
+    (let ((text (text-of source)))
+      (check "p is in the file with its comment, at the margin"
+       (search (format nil "~%;; p first~%(defun bench-test-p () 1)") text))
+      (check "q is in the file" (search (format nil "~%(defun bench-test-q ()~%  (bench-test-p))") text)))
+    (let ((message
+           (refusal
+            (lambda ()
+              (lisp-ai-bench:record-form :after '(progn (defun bench-test-r () 1) (defun bench-test-s () 2))
+                                         "(progn (defun bench-test-r () 1))")))))
+      (check "a progn whose text does not match its forms is refused"
+       (and message (search "could not be matched" message))))
+    (check-equal "and nothing is recorded by it" (lisp-ai-bench:pending) 'nil)))
+
 (defun run-drop-and-scratch (root)
   "drop forgets an experiment, with or without removing it from the image; a definition read in another package than the
    file's is refused."
@@ -216,13 +247,14 @@
     (ensure-directories-exist (merge-pathnames "run/" root))
     (unwind-protect
          (progn
-           (setf lisp-ai-bench:*project* root)
-           (run-ledger root)
-           (run-replace root)
-           (run-anchors root)
-           (run-kinds root)
-           (run-drop-and-scratch root)
-           (run-files root))
+          (setf lisp-ai-bench:*project* root)
+          (run-ledger root)
+          (run-replace root)
+          (run-anchors root)
+          (run-kinds root)
+          (run-progn root)
+          (run-drop-and-scratch root)
+          (run-files root))
       (lisp-ai-bench:forget-all)
       (setf lisp-ai-bench:*project* old-project)
       (setf lisp-ai-bench::*ledger* old-ledger)

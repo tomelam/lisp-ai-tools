@@ -58,7 +58,8 @@ repo can run its own gate (below); and `sbcl-restart-frame-bug.md`, a report of 
 ## How a change flows
 
 1. **Define it in the image.** `bin/lisp eval '(defun fish-glyph (f) ...)'`, read in the project's package. Comments
-   typed above and inside the form travel with it: the ledger keeps the request text, not only the form.
+   typed above and inside the form travel with it: the ledger keeps the request text, not only the form. Definitions
+   sent inside one top-level `progn` are recorded one by one, each with its own text; no other wrapper is looked into.
 2. **Look.** `(pending)` lists what the image holds that no file holds, as `(kind name file)`. `(where 'name)` says
    which file and offset the image records for a name. `bin/lisp status` shows the unsaved count.
 3. **Test it there.** `(run-tests)` loads the project's test system inside the image, without reloading source files
