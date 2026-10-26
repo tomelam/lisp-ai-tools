@@ -1,7 +1,8 @@
 ;;;; The workbench, for every project (docs/workbench.md of the tree): Lisp is changed in the image and saved from it. The
 ;;;; image keeps a ledger of the definitions made through bin/lisp eval (the eval loop of lisp-ai-debug calls
-;;;; RECORD-FORM before and after each top-level form), with the text of each as it was typed, comments included, since
-;;;; READ drops comments. The commands, called by their bare names because a project's package uses this one:
+;;;; RECORD-FORM before and after each top-level form; the definitions inside a top-level progn are recorded one by one),
+;;;; with the text of each as it was typed, comments included, since READ drops comments. The commands, called by their
+;;;; bare names because a project's package uses this one:
 ;;;;   (pending)                     the unsaved definitions
 ;;;;   (save name &key file after before drop-comments drop-docstring)   write one to its file, as typed
 ;;;;   (save-all &key file)          every unsaved one, in the order made
@@ -112,29 +113,79 @@
 (defun record-form (when form text)
   "Called by the eval loop of lisp-ai-debug with WHEN :before and :after each top-level form of a request. Before, the file
    the image records for the definition is noted (the form's own run would wipe it); after, the definition is entered in
-   the ledger with that file and the TEXT as typed. Forms that define nothing are ignored."
-  (let ((kind (definer-of form)))
-    (when kind
-      (multiple-value-bind (name key) (entry-name-and-key kind form)
-        (ecase when
-          (:before (setf (gethash (list kind key) *before*) (or (recorded-source name kind) :none)))
-          (:after
-           (let* ((known (gethash (list kind key) *before*))
-                  (file (cond ((pathnamep known) known)
-                              ((eq known :none) nil)
-                              (t (recorded-source name kind))))
-                  (entry (make-entry :kind kind :name name :key key :form form :text (trim-text text)
-                                     :package *package* :file file :time (get-universal-time))))
-             (remhash (list kind key) *before*)
-             (sb-thread:with-mutex (*ledger-lock*)
-               (setf *ledger*
-                     (append (remove-if (lambda (e) (and (eq (entry-kind e) kind) (equal (entry-key e) key))) *ledger*)
-                             (list entry))))
-             (persist))))))))
+   the ledger with that file and the TEXT as typed. Forms that define nothing are ignored. A top-level PROGN is looked
+   into: each definition inside it is recorded as its own, with its own span of the text (PROGN-PARTS); no other wrapper
+   is."
+  (if (and (consp form) (eq (car form) 'progn))
+      (loop for (subform . subtext) in (progn-parts form text)
+            do (record-form when subform subtext))
+      (let ((kind (definer-of form)))
+        (when kind
+          (multiple-value-bind (name key)
+              (entry-name-and-key kind form)
+            (ecase when
+              (:before (setf (gethash (list kind key) *before*) (or (recorded-source name kind) :none)))
+              (:after
+               (let* ((known (gethash (list kind key) *before*))
+                      (file (cond ((pathnamep known) known) ((eq known :none) nil) (t (recorded-source name kind))))
+                      (entry
+                       (make-entry :kind kind :name name :key key :form form :text (trim-text text) :package *package*
+                        :file file :time (get-universal-time))))
+                 (remhash (list kind key) *before*)
+                 (sb-thread:with-mutex (*ledger-lock*)
+                   (setf *ledger*
+                           (append
+                            (remove-if (lambda (e) (and (eq (entry-kind e) kind) (equal (entry-key e) key))) *ledger*)
+                            (list entry))))
+                 (persist)))))))))
 
 (defun trim-text (text)
   "TEXT without blank lines before its first line or after its last, as it will be written."
   (string-trim '(#\Newline #\Space #\Tab #\Return) text))
+
+(defparameter *indentation* (list (code-char 32) (code-char 9)) "A space and a tab: what indentation is made of.")
+
+(defun line-start (text position)
+  "POSITION moved back to the start of its line when only spaces and tabs come before it on that line, else POSITION."
+  (let ((start position))
+    (loop while (and (plusp start) (member (char text (1- start)) *indentation*))
+          do (decf start))
+    (if (or (zerop start) (char= (char text (1- start)) #\Newline))
+        start
+        position)))
+
+(defun dedent (text)
+  "TEXT with the indentation its lines share removed: the smallest count of leading spaces and tabs among its lines that
+   are not blank, taken off every line."
+  (let* ((lines (uiop/utility:split-string text :separator (string #\Newline)))
+         (indents
+          (loop for line in lines
+                for indent = (or (position-if-not (lambda (c) (member c *indentation*)) line) (length line))
+                when (< indent (length line)) collect indent))
+         (common
+          (if indents
+              (reduce #'min indents)
+              0)))
+    (format nil "~{~a~^~%~}" (mapcar (lambda (line) (subseq line (min common (length line)))) lines))))
+
+(defun progn-parts (form text)
+  "The forms inside the top-level PROGN FORM, each with its own span of TEXT, the comment lines above it included and the
+   indentation they share removed, as a list of (form . text). An error, and nothing recorded, when the spans read from
+   TEXT do not match the forms one for one."
+  (form-edit::with-scratch-package (scratch)
+    (let* ((nodes (form-edit::read-nodes text scratch))
+           (children (and (= (length nodes) 1) (rest (form-edit::node-children (first nodes))))))
+      (unless (= (length children) (length (rest form)))
+        (error
+         "bench: the ~d form~:p inside this progn could not be matched to its text (~d span~:p read): define them as top-level forms, not inside progn"
+         (length (rest form)) (length children)))
+      (loop for subform in (rest form)
+            for child in children
+            collect
+              (cons subform
+                    (dedent
+                     (subseq text (leading-comment-start text (line-start text (form-edit::node-start child)))
+                             (form-edit::node-end child))))))))
 
 ;;; The ledger, read
 
