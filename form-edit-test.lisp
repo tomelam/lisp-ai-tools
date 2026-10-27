@@ -159,6 +159,22 @@
                       (format nil "(defun f (x)~%  ;; keep (me)~%  (vector x 43 (quote y)))~%")))
       (when (probe-file path) (delete-file path)))))
 
+(defun run-tail (directory)
+  "A list that is also the tail of a longer list in the form can be replaced: the read-back compares the forms subform by
+   subform, so the tail (x) of (g x) is not taken for the lambda list (x). Before 2026-10-27 it was, and the hackathon's
+   Lisp team saw (revise 'f \"(readings)\" \"(readings &optional keep)\") refused."
+  (let ((path (merge-pathnames "form-edit-test-tail.lisp" directory)))
+    (unwind-protect
+        (progn
+         (write-text path (format nil "(defun f (x)~%  (g x))~%"))
+         (form-edit::edit-subform path "F" "(x)" "(x &optional (keep (constantly t)))")
+         (check-equal "a lambda list that is also the tail of (g x) is replaced, and only it" (text-of path)
+          (format nil "(defun f (x &optional (keep (constantly t)))~%  (g x))~%"))
+         (write-text path (format nil "(defun f (x)~%  (g x))~%"))
+         (check "a list that occurs as a subform and also as a tail is still one subform, not refused as two"
+          (not (refused-p (lambda () (form-edit::edit-subform path "F" "(x)" "(y)"))))))
+      (when (probe-file path) (delete-file path)))))
+
 (defparameter *delete-sample*
   ";;; header
 (in-package :cl-user)
@@ -723,6 +739,7 @@
     (run-strings directory)
     (run-subform directory)
     (run-atom directory)
+    (run-tail directory)
     (run-delete directory)
     (run-delete-subform directory)
     (run-foreign-packages directory)

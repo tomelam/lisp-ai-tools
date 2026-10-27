@@ -550,6 +550,16 @@
   (cond ((atom expression) expression) ((same-form-p (car expression) old) (without (cdr expression) old))
         (t (cons (without (car expression) old) (without (cdr expression) old)))))
 
+(defun subst-subform (new old tree)
+  "TREE with each subform that is the same form as OLD replaced by NEW. A subform is TREE itself or an element of a list
+   in it, never the tail of a list: SUBST also matches tails, so the lambda list (x) matched the tail of (g x) as well,
+   and the edit of the one subform (x) was refused as reading back wrong (2026-10-27)."
+  (labels ((form (x)
+             (cond ((same-form-p x old) new) ((consp x) (elements x)) (t x)))
+           (elements (x)
+             (cond ((consp x) (cons (form (car x)) (elements (cdr x)))) ((null x) nil) (t (form x)))))
+    (form tree)))
+
 (defun change-subform (path name old new)
   "The work of edit-subform and delete-subform: put the text NEW in place of the subform OLD of the form NAME in the
    file PATH, or, when NEW is NIL, cut that subform out. Returns PATH and, as a second value, what REGISTER-LOCATIONS did
@@ -587,7 +597,7 @@
                   (after (read-nodes result scratch))
                   (expected
                    (if new
-                       (subst new-expression old-expression (node-expression top) :test #'same-form-p)
+                       (subst-subform new-expression old-expression (node-expression top))
                        (without (node-expression top) old-expression))))
              (unless (= (length after) (length nodes))
                (error "The edit would change the number of forms, from ~d to ~d: nothing written" (length nodes)
