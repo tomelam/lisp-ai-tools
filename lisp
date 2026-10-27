@@ -25,11 +25,15 @@ mkdir -p run
 running() { [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null && [ "$(printf T | nc -w 2 -U "$socket" 2>/dev/null)" = "T" ]; }
 
 # --userinit mutes redefinition warnings about libraries only (UIOP, ASDF, Slynk, Eclector): quiet-init.lisp
+# rules/sbcl-runtime, when the project has it, is one line of SBCL runtime options for the always-on image, such as
+# --dynamic-space-size 4096 (megabytes of heap; SBCL's default here is 1024, too small for an export of 4.4 million lines).
 start_server() {
   if running; then echo "lisp-server already running (pid $(cat "$pidfile"))"; return 0; fi
   [ -f "$tools/quiet-init.lisp" ] || { echo "lisp: $tools/quiet-init.lisp is missing" >&2; return 1; }
   rm -f run/*.sock "$pidfile"
-  nohup "$qlot" exec sbcl --noinform --userinit "$tools/quiet-init.lisp" --non-interactive \
+  runtime=$(cat rules/sbcl-runtime 2>/dev/null)
+  # $runtime is unquoted on purpose: its options are separate words
+  nohup "$qlot" exec sbcl $runtime --noinform --userinit "$tools/quiet-init.lisp" --non-interactive \
     --eval "(asdf:load-asd (truename \"$system.asd\"))" \
     --load bin/serve.lisp > run/lisp-server.log 2>&1 &
   child=$!
