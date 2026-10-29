@@ -380,6 +380,27 @@ EOF
     (check "the project's rules/lisp-files.sexp says what Lisp is"
            (member "lisp" (getf (lisp-ai-guard:lisp-files project) :code-suffixes) :test #'equal))))
 
+(defun run-paths-that-exist (root)
+  "With the payload's cwd, a word counts as a path through a Lisp directory only when it names something that exists
+   there, or holds a glob: a search pattern or a word of a program's text that merely contains src, tests or tools is
+   not Lisp. A suffix still counts whatever exists, and a command that changes directory is judged as before. ROOT has
+   src/a.lisp and no tools/. Each row is a command and whether it is refused."
+  (flet ((in-root (command)
+           (format nil "{\"tool_name\":\"Bash\",\"cwd\":~a,\"tool_input\":{\"command\":~a}}"
+                   (com.inuoe.jzon:stringify (string-right-trim "/" (namestring root)))
+                   (com.inuoe.jzon:stringify command))))
+    (dolist
+        (row
+         '(("grep -n \"tools/\\|worktree\" notes.md" nil) ("python3 -c \"print('tools')\"" nil)
+           ("cat tools/README.md" nil) ("grep -r foo src" t) ("grep foo src/a.lisp" t) ("grep foo src/*" t)
+           ("cat missing.lisp" t) ("cd /tmp && cat tools/README.md" t) ("grep -n \"project.lisp\" notes.md" t)))
+      (destructuring-bind
+          (command refused)
+          row
+        (check-equal (format nil "with cwd: ~a" command) (and (verdict (in-root command)) t) refused)))
+    (check "without cwd a word of a program's text that names tools counts, as before"
+     (verdict (hook-json "Bash" "python3 -c \"print('tools')\"")))))
+
 (defun run (directory project)
   "Run the checks with a scratch project inside DIRECTORY, and the checks on the real PROJECT (a directory); returns the
    number of failures."
@@ -391,7 +412,7 @@ EOF
     (write-file (merge-pathnames "src/a.lisp" root) (format nil "(x)~%"))
     (unwind-protect
          (progn (run-guard) (run-guard-wrappers) (run-guard-structure) (run-lisp-files) (run-writers)
-                (run-file-edit directory) (run-hook root) (run-gate-directory root))
+                (run-file-edit directory) (run-hook root) (progn (run-gate-directory root) (run-paths-that-exist root)))
       (when (probe-file root) (uiop:delete-directory-tree root :validate t))))
   (run-project project)
   *failures*)

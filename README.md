@@ -97,6 +97,12 @@ What counts as Lisp is data in each project's `rules/lisp-files.sexp`:
 | A program of `rules/forbidden-programs.sexp` (`cat`, `sed`, `grep`, `awk`, `wc`, `python`, ...) **on Lisp**: its own arguments name a Lisp file or a Lisp directory | The same programs on a log, JSON, markdown, and on the reply of a command that names Lisp (`bin/lisp eval '...' \| head`) |
 | A hook payload it cannot read, or an Edit with no `file_path` | |
 
+A path through a Lisp directory counts when it exists: with the payload's `cwd`, a word whose components include
+`src`, `tests` or `tools` names Lisp only when it names something there that exists, or holds a glob (`src/*`), so a
+search pattern (`grep "tools/\|x" notes.md`) or a word inside a program's text is not taken for a path (2026-10-29). A
+suffix (`.lisp`, `.asd`, `.sexp`) counts whatever exists, and a command that changes directory (`cd`, `pushd`) is
+judged as before, since its paths may be read from elsewhere.
+
 The gate looks through `sudo`, `env`, `nice`, `timeout`, `xargs`, `sh -c`, `eval`, `find -exec`, shell keywords and
 `$(...)` inside double quotes. Each simple command is judged by its own arguments: in `cat TASK.md; ls src` the `cat` is
 on prose, and the Lisp text given to `bin/lisp eval` is the image's business, not the shell's; a program `find -exec`

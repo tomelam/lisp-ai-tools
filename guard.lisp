@@ -256,32 +256,56 @@
 (defun in-lisp-directory-p (token lisp-files)
   (and (intersection (path-components token) (getf lisp-files :directories) :test #'string=) t))
 
-(defun token-names-lisp-p (token lisp-files)
-  "True when TOKEN, a word of a command, names Lisp: a file with a code or data suffix of LISP-FILES, or a path with one
-   of its directories as a component."
-  (let ((type (path-type token)))
-    (or (and type
-             (member type (append (getf lisp-files :code-suffixes) (getf lisp-files :data-suffixes)) :test #'string=)
-             t)
-        (in-lisp-directory-p token lisp-files))))
+(defun path-exists-p (token directory)
+  "True when TOKEN names a file or a directory that exists, read from DIRECTORY; a ~/ at its start is the home
+   directory. A token that is no path at all (a pattern with backslashes, say) does not exist."
+  (let ((path
+         (ignore-errors
+          (cond
+           ((and (>= (length token) 2) (string= "~/" token :end2 2))
+            (merge-pathnames (uiop/filesystem:parse-native-namestring (subseq token 2)) (user-homedir-pathname)))
+           ((and (plusp (length token)) (char= (char token 0) #\/)) (uiop/filesystem:parse-native-namestring token))
+           (t
+            (merge-pathnames (uiop/filesystem:parse-native-namestring token)
+                             (uiop/pathname:ensure-directory-pathname directory)))))))
+    (and path (ignore-errors (probe-file path)) t)))
 
-(defun lisp-names (arguments lisp-files)
-  "The words among ARGUMENTS (those of one simple command, quoting removed) that name Lisp (token-names-lisp-p), in order,
-   each once. A word is looked at whole and, when the whole does not name Lisp, in its pieces (word-tokens)."
+(defun token-names-lisp-p (token lisp-files &optional directory)
+  "True when TOKEN, a word of a command, names Lisp: a file with a code or data suffix of LISP-FILES, or a path with one
+   of its directories as a component. With DIRECTORY, the command's working directory, a path counts by its directories
+   only when it names something there that exists, or holds a glob: a search pattern, or a word of a program's text,
+   that merely contains src, tests or tools is not a path into them (2026-10-29). Without DIRECTORY every such path
+   counts."
+  (let ((type (path-type token)))
+    (or
+     (and type (member type (append (getf lisp-files :code-suffixes) (getf lisp-files :data-suffixes)) :test #'string=)
+          t)
+     (and (in-lisp-directory-p token lisp-files)
+          (or (null directory) (find-if (lambda (c) (find c "*?[")) token) (path-exists-p token directory))))))
+
+(defun lisp-names (arguments lisp-files &optional directory)
+  "The words among ARGUMENTS (those of one simple command, quoting removed) that name Lisp (token-names-lisp-p, with
+   DIRECTORY), in order, each once. A word is looked at whole and, when the whole does not name Lisp, in its pieces
+   (word-tokens)."
   (remove-duplicates
    (loop for word in arguments
-         when (token-names-lisp-p word lisp-files) collect word else append
-           (remove-if-not (lambda (token) (token-names-lisp-p token lisp-files)) (word-tokens word)))
+         when (token-names-lisp-p word lisp-files directory) collect word else append
+           (remove-if-not (lambda (token) (token-names-lisp-p token lisp-files directory)) (word-tokens word)))
    :test #'string= :from-end t))
 
-(defun forbidden-uses-on-lisp (command forbidden lisp-files)
+(defun forbidden-uses-on-lisp (command forbidden lisp-files &optional directory)
   "The simple commands of COMMAND (a shell command string) that run a program of FORBIDDEN on Lisp, each as
    (program . names): NAMES are the words of that command's own arguments that name Lisp (LISP-FILES). A forbidden
    program whose own arguments name no Lisp is not among them, whatever the rest of the line names: the file another
-   program in the pipeline reads, a directory ls lists, the text of a form given to bin/lisp eval."
-  (loop for (program . arguments) in (command-commands command)
-        for names = (and (member program forbidden :test #'string=) (lisp-names arguments lisp-files))
-        when names collect (cons program names)))
+   program in the pipeline reads, a directory ls lists, the text of a form given to bin/lisp eval. DIRECTORY is the
+   command's working directory, for the paths that count only when they exist (token-names-lisp-p); a command that
+   changes directory (cd, pushd) is judged without it, since its paths may be read from elsewhere."
+  (let* ((commands (command-commands command))
+         (directory
+          (and directory (notany (lambda (c) (member (car c) '("cd" "pushd") :test #'string=)) commands) directory)))
+    (loop for (program . arguments) in commands
+          for names = (and (member program forbidden :test #'string=) (lisp-names arguments lisp-files directory))
+          when names collect (cons program names))))
 
 (defparameter *file-writers* '("cp" "mv" "install" "ln" "rsync")
   "Programs whose last word names the file or directory they write.")
@@ -382,7 +406,9 @@
                 (let ((written (written-lisp-files command lisp-files)))
                   (if written
                       (writer-message written)
-                      (let ((uses (forbidden-uses-on-lisp command forbidden lisp-files)))
+                      (let ((uses (forbidden-uses-on-lisp command forbidden lisp-files
+                                   (let ((cwd (gethash "cwd" payload)))
+                                     (and (stringp cwd) cwd)))))
                         (when uses
                           (refusal-message (mapcar #'car uses)
                            (remove-duplicates
