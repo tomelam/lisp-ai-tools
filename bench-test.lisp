@@ -214,6 +214,27 @@
            (lisp-ai-bench:drop "BENCH-TEST-FOREIGN"))
       (delete-package package))))
 
+(defun run-loose (root)
+  "loose-definitions lists a function the image holds and no file holds: one made inside a let, or one dropped from the
+   ledger while the image keeps it; not one the ledger lists, nor one loaded from a file. pending-names names the
+   ledger's, then the loose."
+  (let ((package (make-package "BENCH-TEST-LOOSE" :use '(:cl))) (file (merge-pathnames "run/loose.lisp" root)))
+    (unwind-protect
+        (let ((lisp-ai-bench:*project* :bench-test-loose) (lisp-ai-bench::*ledger* 'nil))
+          (lisp-ai-debug:eval-with-debugging "(defun listed () 1)" package)
+          (lisp-ai-debug:eval-with-debugging "(let ((x 2)) (defun in-let () x))" package)
+          (write-text file (format nil "(in-package :bench-test-loose)~%~%(defun from-file () 3)~%"))
+          (let ((*compile-verbose* nil) (*compile-print* nil) (*load-verbose* nil))
+            (load (compile-file file)))
+          (check-equal "made inside a let, it is loose; listed by the ledger or loaded from a file, it is not"
+           (mapcar #'symbol-name (lisp-ai-bench:loose-definitions)) '("IN-LET"))
+          (check-equal "pending-names names the ledger's, then the loose" (lisp-ai-bench:pending-names)
+           '("LISTED" "IN-LET"))
+          (lisp-ai-bench:drop (find-symbol "LISTED" package))
+          (check-equal "dropped from the ledger and kept in the image, it is loose"
+           (mapcar #'symbol-name (lisp-ai-bench:loose-definitions)) '("IN-LET" "LISTED")))
+      (delete-package package))))
+
 (defun run-files (root)
   "new-file makes a source file with a header and an in-package, once; add-component puts a (:file ...) into the .asd after
    a named file or at the end, as forms, and refuses a duplicate."
@@ -254,6 +275,7 @@
           (run-kinds root)
           (run-progn root)
           (run-drop-and-scratch root)
+          (run-loose root)
           (run-files root))
       (lisp-ai-bench:forget-all)
       (setf lisp-ai-bench:*project* old-project)

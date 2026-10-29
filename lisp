@@ -6,7 +6,7 @@
 #   eval '(form)' ... evaluate each argument in turn in the project's always-on image, started first when it is down;
 #                     print the values of each
 #   start|stop|status the always-on image (loads bin/serve.lisp, answers on run/lisp.sock); stop refuses while the image
-#                     holds definitions no file holds (lisp-ai-bench), stop --discard does not
+#                     holds definitions no file holds, unsaved or loose (lisp-ai-bench), stop --discard does not
 #   test              load the system fresh and run ASDF test-op on SYSTEM/tests
 #   guard             Claude Code PreToolUse hook for Bash, Edit, Write and MultiEdit: the gate (lisp-ai-tools/guard)
 #   mcp               the image as an MCP server for Claude Code (stdio): the script mcp-door beside this one
@@ -63,7 +63,7 @@ status_server() {
   if running; then
     case "$(unsaved)" in
       NIL*) echo "running (pid $(cat "$pidfile")), nothing unsaved" ;;
-      "("*) echo "running (pid $(cat "$pidfile")), unsaved definitions: $(unsaved)" ;;
+      "("*) echo "running (pid $(cat "$pidfile")), definitions no file holds: $(unsaved)" ;;
       *) echo "running (pid $(cat "$pidfile")); it could not say what is unsaved" ;;
     esac
   else echo "not running"; return 1; fi
@@ -76,8 +76,9 @@ stop_server() {
     case "$pending" in
       NIL*) ;;
       "("*)
-        echo "lisp-server holds unsaved definitions: $pending" >&2
+        echo "lisp-server holds definitions no file holds: $pending" >&2
         echo "save them first (bin/lisp eval '(save-all)' or '(save (quote name) :file \"src/x.lisp\")'), or bin/lisp stop --discard" >&2
+        echo "a loose one, which (loose-definitions) lists and (pending) does not, has no text to save: define it again at top level through bin/lisp eval, then save it" >&2
         return 1 ;;
       *) echo "warning: the image could not say what is unsaved ($pending); stopping anyway" >&2 ;;
     esac

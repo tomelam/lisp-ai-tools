@@ -45,7 +45,7 @@ All in `lisp-ai-tools.asd`. A project names the ones it uses in its own `.asd`.
 | `lisp-ai-tools` | `form-edit` | `form-edit.lisp` | Changes a Lisp file **as forms**: replace, insert, append or delete a top-level form by name, or one subform inside a form; every other byte stays as it was. Before writing it checks that the new forms read back as the forms meant; after writing it reads the file back. It recompiles the written `defun`s from the file with their position, so `M-.` finds them. Uses [Eclector](https://github.com/s-expressionists/Eclector) for subform spans. |
 | `lisp-ai-tools/project` | `lisp-ai-project` | `project.lisp` | Where a project's `rules/` and `data/` are, and how its `.sexp` data files are read. |
 | `lisp-ai-tools/debug` | `lisp-ai-debug` | `debug.lisp` | **Debugging in place.** An error in a `bin/lisp eval` request is not unwound: the reply comes at once as `HELD n` with the restarts and the frames, and the failing thread waits. Commands: `debug-locals`, `debug-eval`, `debug-restart-frame`, `debug-invoke`, `debug-abandon`. Also the eval loop, with the observer the workbench records through. |
-| `lisp-ai-tools/bench` | `lisp-ai-bench` | `bench.lisp` | **The workbench.** The ledger of definitions made in the image, with the text as typed; `pending`, `save`, `save-all`, `drop`, `where`, `run-tests`, `new-file`, `add-component`. |
+| `lisp-ai-tools/bench` | `lisp-ai-bench` | `bench.lisp` | **The workbench.** The ledger of definitions made in the image, with the text as typed; `pending`, `save`, `save-all`, `drop`, `where`, `run-tests`, `new-file`, `add-component`; `loose-definitions`, the functions the image holds that no file holds and the ledger does not list. |
 | `lisp-ai-tools/guard` | `lisp-ai-guard` | `guard.lisp` | **The gate.** The one Claude Code PreToolUse hook, for `Bash` and for `Edit`, `Write` and `MultiEdit`. The image answers hook payloads on its socket with the marker `OK:`. |
 | `lisp-ai-tools/echo` | `lisp-ai-echo` | `echo.lisp` | **The echo.** Every request that comes through `bin/lisp eval`, as typed, after the prompt `claude>`, and then its reply, written into the Sly REPL as they happen: whoever is attached with Sly watches the conversation between Claude Code and the image, while the source file moves only at `save`. The script's own probes (is the image alive, what is unsaved) are not shown. `(lisp-ai-echo:start)` in a project's `bin/serve.lisp` turns it on; it hangs on `lisp-ai-debug:*request-observer*`, which sees each request before it runs and each reply as it is sent. |
 | `lisp-ai-tools/kit` | `lisp-ai-kit` | `kit.lisp` | **The kit**, the commands a session in the image keeps reaching for, first made for the hackathon's Lisp workspace (2026-10-26 to 10-28): `verify` (a check whose body is one `verify` prints each failing form and the line `all checks passed` or how many failed), `write-command` and `run-command` (a shell script, relative to the project, that the image answers through `bin/lisp eval` in about 50 ms, written and run from the image), `source` (a definition, or every form of a file of `src/`, printed as forms from the ledger or the file, docstrings shown), `revise` (change one subform of a definition, matched as a form, `%old` to wrap it, then evaluate and record the new definition). A project's package uses `lisp-ai-kit`. |
@@ -62,7 +62,10 @@ repo can run its own gate (below); and `sbcl-restart-frame-bug.md`, a report of 
    typed above and inside the form travel with it: the ledger keeps the request text, not only the form. Definitions
    sent inside one top-level `progn` are recorded one by one, each with its own text; no other wrapper is looked into.
 2. **Look.** `(pending)` lists what the image holds that no file holds, as `(kind name file)`. `(where 'name)` says
-   which file and offset the image records for a name. `bin/lisp status` shows the unsaved count.
+   which file and offset the image records for a name. `(loose-definitions)` lists the functions of the project's
+   package and its tests' package that the image holds, no file holds and the ledger does not list: made inside a
+   `let`, an `eval-when` or a function, or dropped without `:unbind` (2026-10-29, from the hackathon, where a race once
+   ended with a program in the image and two lines in its file). `bin/lisp status` shows the names of both kinds.
 3. **Test it there.** `(run-tests)` loads the project's test system inside the image, without reloading source files
    unchanged on disk, so unsaved definitions survive, and runs the suite against what the image holds. It returns the
    failure count. `trace`, `describe`, `inspect`, xref and the `HELD` commands apply as usual.
@@ -73,7 +76,9 @@ repo can run its own gate (below); and `sbcl-restart-frame-bug.md`, a report of 
    `(add-component "y" :after "x")`, which edits the `.asd` as forms.
 5. **Prove it from the files.** `bin/lisp test` loads the files into a fresh SBCL and runs the suite. Then commit.
 
-`bin/lisp stop` refuses while anything is unsaved and prints the names; `stop --discard` throws them away on purpose.
+`bin/lisp stop` refuses while anything is unsaved or loose and prints the names; `stop --discard` throws them away on
+purpose. A loose function has no text in the ledger, so `save` cannot write it: define it again at top level through
+`bin/lisp eval`, then save it.
 The ledger is mirrored to `run/pending.sexp` after every change, so a crash still leaves the list of what was lost.
 
 What the workbench refuses, and why: a save into a file that does not exist (`new-file` first); of a definition read in
@@ -119,7 +124,7 @@ from a directory name, so a project clones anywhere.
 | Word | Does |
 | --- | --- |
 | `eval '(form)' ...` | Evaluate each argument in turn in the always-on image, in the project's package; print the values of each. Starts the image if it is down. No argument is a usage error. |
-| `start` / `stop` / `status` | The always-on image: loads the project's `bin/serve.lisp`, answers on `run/lisp.sock`, serves Slynk. `stop` refuses while anything is unsaved and waits until the process has exited. |
+| `start` / `stop` / `status` | The always-on image: loads the project's `bin/serve.lisp`, answers on `run/lisp.sock`, serves Slynk. `stop` refuses while anything is unsaved or loose and waits until the process has exited. |
 | `test` | Load the system fresh in a new SBCL and run `test-op` on `<name>/tests`. The arbiter. The loader's warnings go to `run/test.stderr`. |
 | `guard` | The hook. Reads the hook JSON on stdin, asks the image first (about 30 ms), judges in a fresh SBCL when the image does not answer (about 2 s), denies if that fails. |
 | `mcp` | The image as a Model Context Protocol server on stdin and stdout, for Claude Code: one tool, `eval`, whose argument `code` is Lisp text, sent to the image's socket as `eval` sends it, with no shell on the way (no quoting, no heredoc, no rewriting of backslashes). A project declares it in an `mcp.json` (`{"mcpServers": {"lisp": {"command": "bin/lisp", "args": ["mcp"]}}}`) passed with `--mcp-config`. Python's standard library only. |
