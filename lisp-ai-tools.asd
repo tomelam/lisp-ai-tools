@@ -40,6 +40,13 @@
 (defsystem "lisp-ai-tools/echo" :description "The echo: requests and replies shown in the Sly REPL as they happen."
  :depends-on ("lisp-ai-tools/debug" "slynk") :components ((:file "echo")))
 
+;;; The kit (tools/kit.lisp): verify, write-command, run-command, source and revise, the
+;;; commands a session in the image keeps reaching for. A project's package uses it; the door
+;;; for Claude Code is the script mcp-door beside it, run by bin/lisp mcp.
+(defsystem "lisp-ai-tools/kit" :description
+ "The kit: checks, commands the image answers, source as forms, revise by form." :depends-on
+ ("lisp-ai-tools" "lisp-ai-tools/bench" "sb-posix" "uiop") :components ((:file "kit")))
+
 ;;; The gate (tools/guard.lisp, docs/workbench.md): the one PreToolUse
 ;;; hook, for Bash and for Edit, Write and MultiEdit. A Lisp file is
 ;;; changed only through the workbench.
@@ -56,7 +63,7 @@
 (defsystem "lisp-ai-tools/tests"
   :description
   "The tests of the shared tools; a project calls their RUN functions."
-  :depends-on ("lisp-ai-tools" "lisp-ai-tools/debug" "lisp-ai-tools/bench" "lisp-ai-tools/guard" "lisp-ai-tools/echo" "sb-posix"
-               "sb-bsd-sockets" "uiop")
+  :depends-on ("lisp-ai-tools" "lisp-ai-tools/debug" "lisp-ai-tools/bench" "lisp-ai-tools/guard" "lisp-ai-tools/echo"
+               "lisp-ai-tools/kit" "sb-posix" "sb-bsd-sockets" "uiop")
   :components ((:file "form-edit-test") (:file "debug-test") (:file "bench-test") (:file "guard-test") (:file "lisp-script-test")
-               (:file "echo-test")))
+               (:file "echo-test") (:file "kit-test")))

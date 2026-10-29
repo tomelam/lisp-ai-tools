@@ -48,9 +48,10 @@ All in `lisp-ai-tools.asd`. A project names the ones it uses in its own `.asd`.
 | `lisp-ai-tools/bench` | `lisp-ai-bench` | `bench.lisp` | **The workbench.** The ledger of definitions made in the image, with the text as typed; `pending`, `save`, `save-all`, `drop`, `where`, `run-tests`, `new-file`, `add-component`. |
 | `lisp-ai-tools/guard` | `lisp-ai-guard` | `guard.lisp` | **The gate.** The one Claude Code PreToolUse hook, for `Bash` and for `Edit`, `Write` and `MultiEdit`. The image answers hook payloads on its socket with the marker `OK:`. |
 | `lisp-ai-tools/echo` | `lisp-ai-echo` | `echo.lisp` | **The echo.** Every request that comes through `bin/lisp eval`, as typed, after the prompt `claude>`, and then its reply, written into the Sly REPL as they happen: whoever is attached with Sly watches the conversation between Claude Code and the image, while the source file moves only at `save`. The script's own probes (is the image alive, what is unsaved) are not shown. `(lisp-ai-echo:start)` in a project's `bin/serve.lisp` turns it on; it hangs on `lisp-ai-debug:*request-observer*`, which sees each request before it runs and each reply as it is sent. |
+| `lisp-ai-tools/kit` | `lisp-ai-kit` | `kit.lisp` | **The kit**, the commands a session in the image keeps reaching for, first made for the hackathon's Lisp workspace (2026-10-26 to 10-28): `verify` (a check whose body is one `verify` prints each failing form and the line `all checks passed` or how many failed), `write-command` and `run-command` (a shell script, relative to the project, that the image answers through `bin/lisp eval` in about 50 ms, written and run from the image), `source` (a definition, or every form of a file of `src/`, printed as forms from the ledger or the file, docstrings shown), `revise` (change one subform of a definition, matched as a form, `%old` to wrap it, then evaluate and record the new definition). A project's package uses `lisp-ai-kit`. |
 | `lisp-ai-tools/tests` | one package per file | `*-test.lisp` | The tests of all the above. A project runs them from its own suite by calling each package's `run`. |
 
-Beside them: `lisp`, the one shell script a project's `bin/lisp` runs; `quiet-init.lisp`, SBCL's `--userinit` that
+Beside them: `lisp`, the one shell script a project's `bin/lisp` runs; `mcp-door`, the image as an MCP server for Claude Code (`bin/lisp mcp`); `quiet-init.lisp`, SBCL's `--userinit` that
 mutes redefinition warnings about the libraries only; `qlot-setup.lisp`, Qlot's setup file pinning `cl+ssl` to
 openssl@3 on this Mac; `rules/`, the two rules files the gate reads, which a project copies; `qlfile`, so that the
 repo can run its own gate (below); and `sbcl-restart-frame-bug.md`, a report of an SBCL arm64 fault found on the way.
@@ -115,6 +116,7 @@ from a directory name, so a project clones anywhere.
 | `start` / `stop` / `status` | The always-on image: loads the project's `bin/serve.lisp`, answers on `run/lisp.sock`, serves Slynk. `stop` refuses while anything is unsaved and waits until the process has exited. |
 | `test` | Load the system fresh in a new SBCL and run `test-op` on `<name>/tests`. The arbiter. The loader's warnings go to `run/test.stderr`. |
 | `guard` | The hook. Reads the hook JSON on stdin, asks the image first (about 30 ms), judges in a fresh SBCL when the image does not answer (about 2 s), denies if that fails. |
+| `mcp` | The image as a Model Context Protocol server on stdin and stdout, for Claude Code: one tool, `eval`, whose argument `code` is Lisp text, sent to the image's socket as `eval` sends it, with no shell on the way (no quoting, no heredoc, no rewriting of backslashes). A project declares it in an `mcp.json` (`{"mcpServers": {"lisp": {"command": "bin/lisp", "args": ["mcp"]}}}`) passed with `--mcp-config`. Python's standard library only. |
 | `qlot ARGS...` | Qlot with `qlot-setup.lisp`. Needed to install or update, not to run. |
 
 ## Using it in a project
@@ -151,7 +153,8 @@ What the project supplies:
   `bin/lisp start` on `SessionStart`; no `permissions.deny`.
 - `tests/shared-test.lisp` calls `(form-edit-tests:run DIRECTORY)`, `(lisp-ai-bench-tests:run DIRECTORY)`,
   `(lisp-ai-guard-tests:run DIRECTORY PROJECT)`, `(lisp-ai-debug-tests:run DIRECTORY START STOP)`,
-  `(lisp-ai-script-tests:run DIRECTORY START STOP)` and, when the project uses the echo,
+  `(lisp-ai-script-tests:run DIRECTORY START STOP)` (its word `mcp` too), `(lisp-ai-kit-tests:run DIRECTORY)` when the
+  project uses the kit, and, when the project uses the echo,
   `(lisp-ai-echo-tests:run DIRECTORY START STOP)`. The shared tests fail when any of the above is missing.
 - To show the conversation in the Sly REPL: `lisp-ai-tools/echo` among the dependencies and `(lisp-ai-echo:start)` in
   `bin/serve.lisp`, after Slynk is started.

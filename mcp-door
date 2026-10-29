@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""mcp-door -- a project's image as a Model Context Protocol server (stdio) for Claude Code: `bin/lisp mcp`, which runs
+it from the project's directory. A project declares it in its mcp.json: {"mcpServers": {"lisp": {"command": "bin/lisp",
+"args": ["mcp"]}}} (passed with --mcp-config; a project's own .mcp.json stays "pending approval" in headless sessions).
+
+Claude Code starts it with the session and calls its one tool, eval, with Lisp text as a JSON string. The text goes to
+the image's socket (run/lisp.sock) exactly as `bin/lisp eval` sends it, and the reply comes back as the tool's result.
+Nothing passes through a shell on the way: no heredoc, no quoting, no `$(cat ...)`, no Bash rewriting of backslashes,
+no `tail` cutting the reply, no Bash timeout. The image is what it was: the same request handler, the same held errors
+and debug-* requests, the same echo to the Sly REPL, the same workbench ledger.
+
+Python's standard library only, so that it is up in milliseconds. It was the hackathon's (2026-10-27), where a door
+that reached the image through no shell took the Lisp team's quoting troubles away. The
+protocol is MCP's stdio transport: one JSON-RPC message per line on stdin and stdout; stderr is Claude Code's log.
+"""
+import json
+import os
+import socket
+import subprocess
+import sys
+
+ROOT = os.getcwd()  # the project: bin/lisp changes to it
+SOCKET = os.path.join(ROOT, "run", "lisp.sock")
+TIMEOUT = 300  # seconds, as bin/lisp eval's nc -w 300: a held error answers at once, a long request may take this long
+
+EVAL = {
+    "name": "eval",
+    "description": (
+        "Evaluate Lisp in the project's always-on SBCL image, in the project's package. CODE is one or more forms, evaluated in order; "
+        "the reply is what they printed, then one printed line per value of each form. Several definitions and their "
+        "checks may go in one call. An error is not unwound: the reply starts with ERROR:, then HELD n with the restarts "
+        "and frames, and the failing thread waits for (debug-locals n frame), (debug-eval n frame 'form), "
+        "(debug-restart-frame n frame), (debug-invoke n restart args...) or (debug-abandon n), each sent as its own call."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {"code": {"type": "string", "description": "Lisp forms, as they would be typed at a REPL."}},
+        "required": ["code"],
+    },
+}
+
+
+def ask_image(code):
+    """Send CODE to the image and return its reply; raise OSError when the image cannot be reached."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.settimeout(TIMEOUT)
+        s.connect(SOCKET)
+        s.sendall(code.encode("utf-8"))
+        s.shutdown(socket.SHUT_WR)
+        chunks = []
+        while True:
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    return b"".join(chunks).decode("utf-8", errors="replace")
+
+
+def evaluate(code):
+    """The tool's result: the image's reply, or why there is none. An image that is down is started once, as
+    `bin/lisp eval` does, and the start's words are part of the result."""
+    if not code.strip():
+        return "eval: CODE is empty; nothing was sent", True
+    try:
+        return ask_image(code), False
+    except FileNotFoundError:
+        pass
+    except ConnectionRefusedError:
+        pass
+    except socket.timeout:
+        return f"eval: no reply from the image within {TIMEOUT} s; the request may still be running", True
+    except OSError as e:
+        return f"eval: the image's socket {SOCKET} failed: {e}", True
+    start = subprocess.run([os.path.join(ROOT, "bin", "lisp"), "start"], cwd=ROOT, capture_output=True, text=True)
+    said = (start.stdout + start.stderr).strip()
+    if start.returncode != 0:
+        return f"eval: the image was down and could not be started: {said}", True
+    try:
+        return f"(the image was down; {said})\n" + ask_image(code), False
+    except OSError as e:
+        return f"eval: the image was started ({said}) but its socket failed: {e}", True
+
+
+def answer(message):
+    """The reply to one JSON-RPC message, or None for a notification."""
+    method, ident, params = message.get("method"), message.get("id"), message.get("params") or {}
+    if ident is None:
+        return None
+    if method == "initialize":
+        result = {"protocolVersion": params.get("protocolVersion", "2025-06-18"),
+                  "capabilities": {"tools": {}},
+                  "serverInfo": {"name": "lisp", "version": "1"},
+                  "instructions": "The door to the project's running Lisp image: the tool eval."}
+    elif method == "tools/list":
+        result = {"tools": [EVAL]}
+    elif method == "tools/call":
+        if params.get("name") != "eval":
+            return {"jsonrpc": "2.0", "id": ident, "error": {"code": -32602, "message": f"no tool {params.get('name')!r}"}}
+        text, failed = evaluate(str((params.get("arguments") or {}).get("code", "")))
+        result = {"content": [{"type": "text", "text": text}], "isError": failed}
+    elif method == "ping":
+        result = {}
+    else:
+        return {"jsonrpc": "2.0", "id": ident, "error": {"code": -32601, "message": f"no method {method!r}"}}
+    return {"jsonrpc": "2.0", "id": ident, "result": result}
+
+
+def main():
+    for line in sys.stdin:
+        if not line.strip():
+            continue
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError as e:
+            reply = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": f"not JSON: {e}"}}
+        else:
+            reply = answer(message) if isinstance(message, dict) else None
+        if reply is not None:
+            sys.stdout.write(json.dumps(reply) + "\n")
+            sys.stdout.flush()
+
+
+if __name__ == "__main__":
+    main()

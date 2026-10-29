@@ -9,6 +9,7 @@
 #                     holds definitions no file holds (lisp-ai-bench), stop --discard does not
 #   test              load the system fresh and run ASDF test-op on SYSTEM/tests
 #   guard             Claude Code PreToolUse hook for Bash, Edit, Write and MultiEdit: the gate (lisp-ai-tools/guard)
+#   mcp               the image as an MCP server for Claude Code (stdio): the script mcp-door beside this one
 #   qlot ARGS...      Qlot with the setup file that pins cl+ssl to openssl@3 (needed to install or update, not to run)
 # Everything else is the project's own: bin/serve.lisp. Qlot is $HOME/.qlot/bin/qlot, or $QLOT.
 system=$1
@@ -162,11 +163,15 @@ case $word in
     fi
     exit 0
     ;;
+  mcp)
+    # Qlot drops the executable bit of the files it installs, so the door is run by python3 by name.
+    exec python3 "$tools/mcp-door"
+    ;;
   qlot)
     QLOT_SETUP_FILE="$tools/qlot-setup.lisp" exec "$qlot" "$@"
     ;;
   *)
-    echo "usage: bin/lisp eval|start|stop|status|test|guard|qlot ..." >&2
+    echo "usage: bin/lisp eval|start|stop|status|test|guard|mcp|qlot ..." >&2
     exit 2
     ;;
 esac
