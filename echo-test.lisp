@@ -105,11 +105,46 @@
             lisp-ai-echo:*speaker* speaker
             lisp-ai-debug:*request-observer* observer))))
 
+(defun fake-connection ()
+  "A Slynk connection with no Emacs behind it, for REPL-TARGET to look into."
+  (slynk::make-multithreaded-connection :socket nil :socket-io
+                                        (make-two-way-stream (make-string-input-stream "") (make-broadcast-stream))))
+
+(defun fake-listener (connection)
+  "A listener made as Slynk makes one for CONNECTION, which records it as one of the connection's listeners."
+  (let ((slynk::*emacs-connection* connection))
+    (make-instance 'slynk::listener :out (make-string-output-stream) :in (make-string-input-stream ""))))
+
+(defun run-repl-target ()
+  "Where the echo writes, on connections made up here: the REPL held as a channel, as a listener, in the newest
+   connection; and with a connection and no REPL, an error once."
+  (let* ((connection (fake-connection)) (repl (fake-listener connection)))
+    (setf (slynk::connection-listeners connection) nil
+          (slynk::connection-channels connection) (list repl))
+    (let ((slynk::*connections* (list connection)))
+      (check-equal "a REPL the connection holds only as a channel, with no listener, is written to"
+       (multiple-value-list (lisp-ai-echo::repl-target)) (list (slynk::listener-out repl) connection))))
+  (let* ((connection (fake-connection)) (listener (fake-listener connection)))
+    (let ((slynk::*connections* (list connection)))
+      (check-equal "a REPL held only as a listener is written to" (multiple-value-list (lisp-ai-echo::repl-target))
+       (list (slynk::listener-out listener) connection))))
+  (let* ((old (fake-connection)) (new (fake-connection)) (listener (fake-listener new)))
+    (fake-listener old)
+    (let ((slynk::*connections* (list new old)))
+      (check-equal "the newest connection is the one written to" (multiple-value-list (lisp-ai-echo::repl-target))
+       (list (slynk::listener-out listener) new))))
+  (let ((connection (fake-connection)))
+    (let ((slynk::*connections* (list connection)) (lisp-ai-echo::*unshown* 'nil))
+      (check "with a connection and no REPL, writing is an error"
+       (handler-case (progn (lisp-ai-echo::write-to-repl :request "(+ 1 2)") nil) (error nil t)))
+      (check "once: the next write to that connection says nothing"
+       (null (lisp-ai-echo::write-to-repl :request "(+ 1 2)"))))))
+
 (defun run (directory start stop)
   "Run the checks against a server of the calling project, started by START on a socket in DIRECTORY and ended by STOP.
    Returns the number of failures."
   (setf *failures* 0)
-  (run-write-exchange)
+  (progn (run-write-exchange) (run-repl-target))
   (if slynk::*connections*
       (format t "SKIP: an Emacs is connected, so the write to no REPL was not checked~%")
       (check "with no Emacs connected, the write to the REPL does nothing and does not fail"

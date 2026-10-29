@@ -36,20 +36,37 @@
        (fresh-line stream)))))
 
 (defun repl-target ()
-  "The Sly REPL to write to: the output stream of the first listener of the first Emacs connection, and that connection;
-   NIL when no Emacs is connected or the one connected has opened no REPL."
+  "The Sly REPL to write to: in the newest Emacs connection, the output stream of its first REPL channel (a channel that
+   is a listener, as Slynk's REPLs are), else of its first listener. Second value, that connection, also when it has no
+   REPL to write to; NIL and NIL when no Emacs is connected. The channel comes first because on 2026-10-29 the aquarium
+   demo's test saw a connection whose REPL answered while it had no listener, and the echo, which looked only for the
+   listener, wrote nothing and said nothing."
   (let* ((connection (first slynk::*connections*))
-         (listener (and connection (slynk::default-listener connection))))
-    (when listener (values (slynk::listener-out listener) connection))))
+         (listener
+          (and connection
+               (or
+                (find-if (lambda (channel) (typep channel 'slynk::listener)) (slynk::connection-channels connection))
+                (slynk::default-listener connection)))))
+    (values (and listener (slynk::listener-out listener)) connection)))
+
+(defvar *unshown*
+  'nil
+  "The Emacs connections already reported as having no REPL to write to, so that each is reported once.")
 
 (defun write-to-repl (when text)
   "Write one side of an exchange to the Sly REPL, inside its connection: that is what sends the text on to Emacs from a
-   thread that is not Slynk's own (outside it the stream takes the text and nothing arrives). Nothing when no REPL is open."
-  (multiple-value-bind (stream connection) (repl-target)
-    (when stream
+   thread that is not Slynk's own (outside it the stream takes the text and nothing arrives). Nothing when no Emacs is
+   connected. When one is connected but has no REPL to write to, that is an error, once for each connection: the
+   request's reply then carries the line ;; observer: and the reason, and the request runs as before."
+  (multiple-value-bind (stream connection)
+      (repl-target)
+    (cond
+     (stream
       (slynk::with-connection (connection)
         (write-exchange stream when text)
-        (finish-output stream)))))
+        (finish-output stream)))
+     ((and connection (not (member connection *unshown*))) (push connection *unshown*)
+      (error "the echo found no Sly REPL to write to in ~a, so requests are not shown there" connection)))))
 
 (defvar *write* 'write-to-repl
   "The function called with (WHEN TEXT) for each side of an exchange that is shown. WRITE-TO-REPL writes to the Sly REPL;
