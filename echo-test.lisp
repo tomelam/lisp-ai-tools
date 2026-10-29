@@ -117,7 +117,7 @@
 
 (defun run-repl-target ()
   "Where the echo writes, on connections made up here: the REPL held as a channel, as a listener, in the newest
-   connection; and with a connection and no REPL, an error once."
+   connection; and with a connection and no REPL, a line on the echo's report stream, once."
   (let* ((connection (fake-connection)) (repl (fake-listener connection)))
     (setf (slynk::connection-listeners connection) nil
           (slynk::connection-channels connection) (list repl))
@@ -133,12 +133,14 @@
     (let ((slynk::*connections* (list new old)))
       (check-equal "the newest connection is the one written to" (multiple-value-list (lisp-ai-echo::repl-target))
        (list (slynk::listener-out listener) new))))
-  (let ((connection (fake-connection)))
-    (let ((slynk::*connections* (list connection)) (lisp-ai-echo::*unshown* 'nil))
-      (check "with a connection and no REPL, writing is an error"
-       (handler-case (progn (lisp-ai-echo::write-to-repl :request "(+ 1 2)") nil) (error nil t)))
-      (check "once: the next write to that connection says nothing"
-       (null (lisp-ai-echo::write-to-repl :request "(+ 1 2)"))))))
+  (let* ((connection (fake-connection)) (report (make-string-output-stream)))
+    (let ((slynk::*connections* (list connection)) (lisp-ai-echo::*unshown* 'nil) (lisp-ai-echo::*report* report))
+      (check "with a connection and no REPL, the write does not fail"
+       (null (lisp-ai-echo::write-to-repl :request "(+ 1 2)")))
+      (check "and it says so on the report stream"
+       (search "holds no REPL to write to" (get-output-stream-string report)))
+      (lisp-ai-echo::write-to-repl :request "(+ 1 2)")
+      (check-equal "once: the next write to that connection says nothing" (get-output-stream-string report) ""))))
 
 (defun run (directory start stop)
   "Run the checks against a server of the calling project, started by START on a socket in DIRECTORY and ended by STOP.

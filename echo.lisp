@@ -53,11 +53,18 @@
   'nil
   "The Emacs connections already reported as having no REPL to write to, so that each is reported once.")
 
+(defvar *report*
+  sb-sys:*stderr*
+  "Where the echo says that it cannot show requests: the image's own standard error, which bin/lisp start sends to
+   run/lisp-server.log, not the reply, since programs read replies (2026-10-29: a ;; observer: line in the reply of
+   (pending) stopped the aquarium demo from starting). The tests bind it to a stream of their own.")
+
 (defun write-to-repl (when text)
   "Write one side of an exchange to the Sly REPL, inside its connection: that is what sends the text on to Emacs from a
    thread that is not Slynk's own (outside it the stream takes the text and nothing arrives). Nothing when no Emacs is
-   connected. When one is connected but has no REPL to write to, that is an error, once for each connection: the
-   request's reply then carries the line ;; observer: and the reason, and the request runs as before."
+   connected. When one is connected but holds no REPL to write to, say so on *REPORT*, once for each connection, and
+   write nothing. Slynk was seen, after Emacs reconnected at once, to list only the old connection, emptied, while the
+   REPL ran on a new one it did not list (2026-10-29)."
   (multiple-value-bind (stream connection)
       (repl-target)
     (cond
@@ -66,7 +73,10 @@
         (write-exchange stream when text)
         (finish-output stream)))
      ((and connection (not (member connection *unshown*))) (push connection *unshown*)
-      (error "the echo found no Sly REPL to write to in ~a, so requests are not shown there" connection)))))
+      (format *report*
+              "~&;; echo: the Sly connection ~a holds no REPL to write to, so requests are not shown in Emacs~%"
+              connection)
+      (finish-output *report*)))))
 
 (defvar *write* 'write-to-repl
   "The function called with (WHEN TEXT) for each side of an exchange that is shown. WRITE-TO-REPL writes to the Sly REPL;
