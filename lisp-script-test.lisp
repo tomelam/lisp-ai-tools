@@ -122,11 +122,46 @@
         (check "a failed start exits non-zero" (and (integerp code) (plusp code)))
         (check "a failed start says why" (and (search "was down" err) (search "could not be started" err)))))))
 
+(defun run-mcp (top start stop)
+  "The script's word mcp: the door for Claude Code, an MCP server on stdin and stdout, asks a healthy server: it lists
+   the one tool eval, answers a call with the image's reply, and refuses empty code as an error, sending nothing."
+  (let* ((root (concatenate 'string top "project/")) (path (concatenate 'string root "run/lisp.sock")))
+    (when (probe-file top) (uiop/filesystem:delete-directory-tree (pathname top) :validate t))
+    (ensure-directories-exist (concatenate 'string root "run/"))
+    (let ((server (funcall start path)))
+      (unwind-protect
+          (multiple-value-bind (out err code)
+              (uiop/run-program:run-program (list "sh" *script* "scratch" "mcp") :directory root :output :string
+                                            :error-output :string :ignore-error-status t :input
+                                            (make-string-input-stream
+                                             (format nil "~{~a~%~}"
+                                                     (list
+                                                      "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}"
+                                                      "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}"
+                                                      "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}"
+                                                      "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"eval\",\"arguments\":{\"code\":\"(* 6 7)\"}}}"
+                                                      "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"eval\",\"arguments\":{\"code\":\" \"}}}"))))
+            (let ((replies
+                   (mapcar #'com.inuoe.jzon:parse
+                           (uiop/utility:split-string (string-right-trim '(#\Newline) out) :separator '(#\Newline)))))
+              (flet ((result (id)
+                       (gethash "result" (find id replies :key (lambda (r) (gethash "id" r))))))
+                (check-equal "mcp exits 0 at the end of its input" code 0)
+                (check-equal "mcp writes nothing on stderr" err "")
+                (check-equal "mcp answers the four requests, not the notification" (length replies) 4)
+                (check-equal "mcp lists one tool, eval"
+                 (map 'list (lambda (tool) (gethash "name" tool)) (gethash "tools" (result 2))) '("eval"))
+                (check-equal "mcp's eval gives the image's reply"
+                 (gethash "text" (aref (gethash "content" (result 3)) 0)) (format nil "42~%"))
+                (check-equal "mcp's eval of the image's reply is not an error" (gethash "isError" (result 3)) nil)
+                (check-equal "mcp refuses empty code as an error" (gethash "isError" (result 4)) t))))
+        (funcall stop server)))))
+
 (defun run (directory start stop)
   "Run the checks with a scratch project inside DIRECTORY; START and STOP start and end a server of the calling project.
    Returns the number of failures."
   (setf *failures* 0)
   (let ((top (namestring (merge-pathnames "script-test/" (uiop:ensure-directory-pathname directory)))))
-    (unwind-protect (run-eval top start stop)
+    (unwind-protect (progn (run-eval top start stop) (run-mcp top start stop))
       (when (probe-file top) (uiop:delete-directory-tree (pathname top) :validate t))))
   *failures*)
