@@ -11,11 +11,26 @@
 ;;;;   (run-tests)                   the project's own suite, inside this image, against what the image holds
 ;;;;   (new-file path &key package)  a new source file with a header and an in-package
 ;;;;   (add-component name &key after module system)   a new (:file ...) in the project's .asd
-;;;; The ledger is mirrored to run/pending.sexp after every change, and bin/lisp stop refuses while it is not empty.
+;;;;   (loose-definitions)           the functions the image holds that no file holds and the ledger does not list
+;;;; The ledger is mirrored to run/pending.sexp after every change, and bin/lisp stop refuses while it is not empty or a
+;;;; function is loose.
 (defpackage :lisp-ai-bench
   (:use :cl)
-  (:export #:configure #:*project* #:record-form #:pending #:pending-names #:save #:save-all #:drop #:where
-           #:run-tests #:new-file #:add-component #:ledger #:forget-all))
+  (:export #:configure
+           #:*project*
+           #:record-form
+           #:pending
+           #:pending-names
+           #:loose-definitions
+           #:save
+           #:save-all
+           #:drop
+           #:where
+           #:run-tests
+           #:new-file
+           #:add-component
+           #:ledger
+           #:forget-all))
 (in-package :lisp-ai-bench)
 
 (defvar *project* nil
@@ -210,9 +225,36 @@
   (mapcar (lambda (e) (list (entry-kind e) (entry-name e) (and (entry-file e) (enough-namestring (entry-file e) (project-directory)))))
           (entries)))
 
+(defun project-packages ()
+  "The packages whose functions LOOSE-DEFINITIONS examines: the project's own and its tests' (<PROJECT>/TESTS), those
+   of them that exist. None when the project is named by a directory, as in the tests."
+  (let ((project (project)))
+    (when (symbolp project)
+      (remove nil (mapcar #'find-package (list (symbol-name project) (format nil "~a/TESTS" (symbol-name project))))))))
+
+(defun loose-definitions (&optional (packages (project-packages)))
+  "The functions, macros and generic functions of PACKAGES (by default the project's own and its tests') that the image
+   holds, that no file holds and that the ledger does not list: made inside a LET, an EVAL-WHEN or a function, or
+   dropped from the ledger without :UNBIND. A restart loses them, and SAVE cannot write them, since the ledger has no
+   text for them: define each again at top level through bin/lisp eval, then save it. A function counts as held by a
+   file when SBCL records a file for it or for one of its methods. A (SETF NAME) function is not examined. The symbols,
+   sorted by name."
+  (let ((listed (mapcar #'entry-name (entries :state nil))) (found 'nil))
+    (dolist (package packages)
+      (do-symbols (symbol package)
+        (when
+            (and (eq (symbol-package symbol) package) (fboundp symbol) (not (special-operator-p symbol))
+                 (not (member symbol listed))
+                 (notany #'sb-introspect:definition-source-pathname
+                         (loop for type in '(:function :macro :generic-function :method)
+                               append (sb-introspect:find-definition-sources-by-name symbol type))))
+          (pushnew symbol found))))
+    (sort found #'string< :key #'symbol-name)))
+
 (defun pending-names ()
-  "The names of the unsaved definitions, as strings: what bin/lisp stop asks before stopping the image."
-  (mapcar (lambda (e) (name-string (entry-name e))) (entries)))
+  "The names of the definitions the image holds and no file holds, as strings: the unsaved ones of the ledger, then the
+   loose ones (LOOSE-DEFINITIONS). What bin/lisp stop asks before stopping the image, and what bin/lisp status shows."
+  (append (mapcar (lambda (e) (name-string (entry-name e))) (entries)) (mapcar #'name-string (loose-definitions))))
 
 (defun drop (name &key unbind)
   "Forget the unsaved definitions named NAME. With UNBIND, also remove them from the image (fmakunbound, makunbound)."
