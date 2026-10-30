@@ -170,8 +170,10 @@ What the project supplies:
 - To show the conversation in the Sly REPL: `lisp-ai-tools/echo` among the dependencies and `(lisp-ai-echo:start)` in
   `bin/serve.lisp`, after Slynk is started.
 
-Two projects use it today: `aquarium`, a demo tank of fish drawn as text once a second and changed while it runs, and
-`code-as-data`. Their `CLAUDE.md` files and the tree's `docs/workbench.md` hold the full method.
+Four projects use it today (2026-10-30): `aquarium` ([github.com/tomelam/aquarium](https://github.com/tomelam/aquarium)),
+a demo tank of fish drawn as text once a second and changed while it runs; `paip-gps`, a second demo, Norvig's General
+Problem Solver changed while it runs; `code-as-data`; and the hackathon's Lisp workspace, frozen at `b3dab17` for its
+reruns. The first three pin `7b7a78b`. Their `CLAUDE.md` files and the tree's `docs/workbench.md` hold the full method.
 
 ## Testing
 
