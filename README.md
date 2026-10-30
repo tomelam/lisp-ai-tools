@@ -174,6 +174,8 @@ Four projects use it today (2026-10-30): `aquarium` ([github.com/tomelam/aquariu
 a demo tank of fish drawn as text once a second and changed while it runs; `paip-gps`, a second demo, Norvig's General
 Problem Solver changed while it runs; `code-as-data`; and the hackathon's Lisp workspace, frozen at `b3dab17` for its
 reruns. The first three pin `7b7a78b`. Their `CLAUDE.md` files and the tree's `docs/workbench.md` hold the full method.
+The open work on these tools is kept with the projects', on Tom's machine, in the tree's `NEXT.md` (its table "By
+repo", the row lisp-ai-tools); this repo holds no list of its own.
 
 ## Testing
 
