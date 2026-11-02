@@ -696,7 +696,8 @@
           (dolist (text '("(defstruct kinds-test-box lid)" "(defgeneric kinds-test-generic (x))"
                           "(defmethod kinds-test-generic ((x t)) :generic)" "(defun kinds-test-plain (x) (list :plain x))"
                           "(defun kinds-test-plain-2 (x) (list :plain x))"))
-            (eval (in-cl-user text)))
+            (let ((*package* (find-package :cl-user)))
+              (eval (in-cl-user text))))
           (let ((report (edited "KINDS-TEST-BOX-LID" "(list :file box)" "(list :edited box)")))
             (check-equal "a defun over a structure's accessor is not compiled" (getf report :registered) 'nil)
             (check "it is skipped, and the reason names the defstruct" (search "made by a defstruct" (reason accessor report)))
