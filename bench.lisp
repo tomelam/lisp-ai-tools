@@ -14,6 +14,9 @@
 ;;;;   (loose-definitions)           the functions the image holds that no file holds and the ledger does not list
 ;;;; The ledger is mirrored to run/pending.sexp after every change, and bin/lisp stop refuses while it is not empty or a
 ;;;; function is loose.
+;;;; An unsaved definition that the image no longer runs, because a later definition of its name replaced it (a
+;;;; defstruct's accessor over a defun, say), is superseded: (pending) and save-all leave it out and say so, and save
+;;;; refuses it, since writing it would put the old text back (found in the hackathon's meter-feed race, 2026-11-01).
 (defpackage :lisp-ai-bench
   (:use :cl)
   (:export #:configure
@@ -46,7 +49,8 @@
   text        ; the text as typed, leading comment lines included
   package     ; the package the form was read in
   file        ; the file the image recorded for the name before the form ran, or NIL
-  (state :unsaved)
+  object      ; what the image ran under the name right after the form ran (IMAGE-OBJECT), or NIL when not compared
+  (state :unsaved)   ; :unsaved, :saved, or :superseded once the image no longer runs it (SUPERSEDED-P)
   time)
 
 (defvar *ledger* '() "The entries, oldest first.")
@@ -123,6 +127,29 @@
             (return-from recorded-source
               (values path (sb-introspect:definition-source-character-offset source)))))))))
 
+(defun image-object (kind name)
+  "What the image runs under NAME for a definition of KIND, seen through TRACE and any other encapsulation: the macro
+   function for :defmacro; for :defun, :defgeneric and :defmethod the function (for a method, its generic function).
+   NIL when the image has nothing of that sort under NAME, and for every other kind, which the ledger does not compare."
+  (case kind
+    (:defmacro (and (symbolp name) (macro-function name)))
+    ((:defun :defgeneric :defmethod)
+     (when (and (fboundp name) (not (and (symbolp name) (or (macro-function name) (special-operator-p name)))))
+       (let ((function (fdefinition name)))
+         (loop for info = (sb-impl::encapsulation-info function)
+               while info
+               do (setf function (sb-impl::encapsulation-info-definition info)))
+         function)))))
+
+(defun superseded-p (entry)
+  "True when the image no longer runs ENTRY's definition: what it runs under the name is not what it ran right after
+   ENTRY's form, because a later definition of the name replaced it, by any definer (a DEFSTRUCT's accessor over a DEFUN,
+   say), or the name was unbound. Saving such an entry would write the old text and compile it back over what the image
+   runs: the hackathon's meter-feed race lost a round that way (2026-11-01). Never true for the kinds IMAGE-OBJECT does
+   not compare."
+  (let ((object (entry-object entry)))
+    (and object (not (eq object (image-object (entry-kind entry) (entry-name entry)))))))
+
 ;;; Recording
 
 (defun record-form (when form text)
@@ -130,7 +157,8 @@
    the image records for the definition is noted (the form's own run would wipe it); after, the definition is entered in
    the ledger with that file and the TEXT as typed. Forms that define nothing are ignored. A top-level PROGN is looked
    into: each definition inside it is recorded as its own, with its own span of the text (PROGN-PARTS); no other wrapper
-   is."
+   is.
+   The entry keeps what the image runs under the name right after the form (IMAGE-OBJECT), for SUPERSEDED-P."
   (if (and (consp form) (eq (car form) 'progn))
       (loop for (subform . subtext) in (progn-parts form text)
             do (record-form when subform subtext))
@@ -144,8 +172,8 @@
                (let* ((known (gethash (list kind key) *before*))
                       (file (cond ((pathnamep known) known) ((eq known :none) nil) (t (recorded-source name kind))))
                       (entry
-                       (make-entry :kind kind :name name :key key :form form :text (trim-text text) :package *package*
-                        :file file :time (get-universal-time))))
+                       (make-entry :kind kind :name name :key key :form form :text (trim-text text) :package *package* :file file :object
+                        (image-object kind name) :time (get-universal-time))))
                  (remhash (list kind key) *before*)
                  (sb-thread:with-mutex (*ledger-lock*)
                    (setf *ledger*
@@ -205,8 +233,23 @@
 ;;; The ledger, read
 
 (defun entries (&key (state :unsaved))
-  (sb-thread:with-mutex (*ledger-lock*)
-    (remove-if-not (lambda (e) (or (null state) (eq (entry-state e) state))) *ledger*)))
+  "The entries in STATE (:unsaved, :saved or :superseded; NIL for every one), oldest first. An unsaved entry that the
+   image no longer runs (SUPERSEDED-P) is first marked :superseded, a line says so, and the mirror is written again; it
+   stays in the ledger, out of (pending), until DROP forgets it or a new definition of its kind and key replaces it."
+  (let* ((marked '())
+         (found
+          (sb-thread:with-mutex (*ledger-lock*)
+            (dolist (e *ledger*)
+              (when (and (eq (entry-state e) :unsaved) (superseded-p e))
+                (setf (entry-state e) :superseded)
+                (push e marked)))
+            (remove-if-not (lambda (e) (or (null state) (eq (entry-state e) state))) *ledger*))))
+    (when marked
+      (dolist (e (reverse marked))
+        (format t "~&;; bench: the ledger's ~(~a~) ~a is superseded: the image no longer runs it, since a later definition of the name replaced it. It will not be saved; (drop '~a) forgets it.~%"
+                (entry-kind e) (name-string (entry-name e)) (name-string (entry-name e))))
+      (persist))
+    found))
 
 (defun ledger () "Every entry, saved ones too." (entries :state nil))
 
@@ -221,7 +264,8 @@
     (remove-if-not (lambda (e) (string= (name-string (entry-name e)) wanted)) (entries :state state))))
 
 (defun pending ()
-  "The unsaved definitions, oldest first, each as (kind name file-or-nil)."
+  "The unsaved definitions, oldest first, each as (kind name file-or-nil).
+   A superseded one (SUPERSEDED-P) is not among them: ENTRIES marks it and says so."
   (mapcar (lambda (e) (list (entry-kind e) (entry-name e) (and (entry-file e) (enough-namestring (entry-file e) (project-directory)))))
           (entries)))
 
@@ -257,15 +301,18 @@
   (append (mapcar (lambda (e) (name-string (entry-name e))) (entries)) (mapcar #'name-string (loose-definitions))))
 
 (defun drop (name &key unbind)
-  "Forget the unsaved definitions named NAME. With UNBIND, also remove them from the image (fmakunbound, makunbound)."
-  (let ((dropped (entries-named name)))
-    (unless dropped (error "bench: nothing unsaved is named ~a" name))
+  "Forget the unsaved and the superseded definitions named NAME. With UNBIND, also remove the unsaved ones from the image
+   (fmakunbound, makunbound); a superseded one is not unbound, since what the image runs under its name is the later
+   definition that replaced it."
+  (let ((dropped (remove :saved (entries-named name :state nil) :key #'entry-state)))
+    (unless dropped (error "bench: nothing unsaved or superseded is named ~a" name))
     (sb-thread:with-mutex (*ledger-lock*) (setf *ledger* (set-difference *ledger* dropped)))
     (when unbind
       (dolist (e dropped)
-        (case (entry-kind e)
-          ((:defun :defmacro :defgeneric) (when (fboundp (entry-name e)) (fmakunbound (entry-name e))))
-          ((:defvar :defparameter) (when (boundp (entry-name e)) (makunbound (entry-name e)))))))
+        (when (eq (entry-state e) :unsaved)
+          (case (entry-kind e)
+            ((:defun :defmacro :defgeneric) (when (fboundp (entry-name e)) (fmakunbound (entry-name e))))
+            ((:defvar :defparameter) (when (boundp (entry-name e)) (makunbound (entry-name e))))))))
     (persist)
     (mapcar #'entry-kind dropped)))
 
@@ -404,9 +451,15 @@
    the form BEFORE, or at the end. Refused, and nothing written: when the file's definition has comments inside it that
    the new text lacks, or a docstring the new form lacks (DROP-COMMENTS and DROP-DOCSTRING say it is meant); when the
    definition was made in the SCRATCH package; when FILE does not exist (new-file first). Several unsaved definitions of
-   one name (methods) are all saved. Returns the file and the register report of the last one."
+   one name (methods) are all saved. Returns the file and the register report of the last one.
+   A superseded definition (SUPERSEDED-P) is refused, and nothing written: it would put back text the image no longer runs."
   (let ((entries (entries-named name)) (path nil) (report nil))
-    (unless entries (error "bench: nothing unsaved is named ~a; (pending) lists what there is" name))
+    (unless entries
+      (when (entries-named name :state :superseded)
+        (error
+         "bench: ~a is superseded: the image no longer runs the ledger's text for it, since a later definition of the name replaced it, so saving it would put the old text back over what the image runs. Nothing written. Define it again through bin/lisp eval to save it, or (drop '~a) to forget it"
+         name name))
+      (error "bench: nothing unsaved is named ~a; (pending) lists what there is" name))
     (dolist (entry entries)
       (when (string= (package-name (entry-package entry)) "SCRATCH")
         (error "bench: ~a was defined in the SCRATCH package; define it in the project's package (bin/lisp eval reads there) and save that" name))
@@ -465,7 +518,8 @@
 
 (defun save-all (&key file)
   "Save every unsaved definition, oldest first, each to its known file, or to FILE when none is known. Stops at the first
-   refusal, saying which were saved. Returns the names saved."
+   refusal, saying which were saved. The superseded ones (SUPERSEDED-P) are not saved, and a line names them. Returns the
+   names saved."
   (let ((saved '()))
     (handler-bind ((error (lambda (e)
                             (when saved (format t "~&;; saved before the refusal: ~{~a~^, ~}~%" (reverse saved)))
@@ -473,6 +527,10 @@
       (loop for entry = (first (entries)) while entry
             do (save (entry-name entry) :file (and (null (entry-file entry)) file))
                (push (entry-name entry) saved)))
+    (let ((superseded (entries :state :superseded)))
+      (when superseded
+        (format t "~&;; bench: not saved, superseded in the image by a later definition: ~{~a~^, ~}~%"
+                (mapcar (lambda (e) (name-string (entry-name e))) superseded))))
     (nreverse saved)))
 
 ;;; New files and the .asd

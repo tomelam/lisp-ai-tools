@@ -96,8 +96,9 @@ printf '%s\\n' \"$reply\"
 
 (defun definition-text (name)
   "The source text of the definition NAME: that of its newest entry in the ledger (saved or not), else its form in the
-   file the image records for it. Second value, the package to read it in. An error when the image knows neither."
-  (let ((entry (car (last (lisp-ai-bench::entries-named name :state nil)))))
+   file the image records for it. Second value, the package to read it in. An error when the image knows neither.
+   A superseded entry is passed over: the image no longer runs it (lisp-ai-bench::superseded-p)."
+  (let ((entry (car (last (remove :superseded (lisp-ai-bench::entries-named name :state nil) :key #'lisp-ai-bench::entry-state)))))
     (if entry
         (values (lisp-ai-bench::entry-text entry) (lisp-ai-bench::entry-package entry))
         (let ((file (lisp-ai-bench:where name)))
