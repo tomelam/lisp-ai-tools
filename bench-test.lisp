@@ -214,6 +214,44 @@
            (lisp-ai-bench:drop "BENCH-TEST-FOREIGN"))
       (delete-package package))))
 
+(defun run-superseded (root)
+  "A definition that a later one of its name replaced, by any definer, is superseded: not pending, and the reply of the
+   request that replaced it says so; refused by save; left out by save-all, with a line naming it; dropped without
+   unbinding what replaced it. The case of the hackathon's meter-feed (2026-11-01): a defun took the name of a
+   structure's accessor, the defstruct was evaluated again, and the save wrote the defun and compiled it back over the
+   accessor. A traced function is not superseded."
+  (let ((source (merge-pathnames "src/s.lisp" root))
+        (accessor (sym "BENCH-TEST-FEED-STUCK"))
+        (traced (sym "BENCH-TEST-TRACED")))
+    (flet ((stuck-of-a-new-feed () (funcall accessor (funcall (sym "MAKE-BENCH-TEST-FEED") :stuck 7)))
+           (said (thunk)
+             (let ((value nil))
+               (values (with-output-to-string (*standard-output*) (setf value (funcall thunk))) value))))
+      (write-text source (format nil "(in-package :cl-user)~%"))
+      (evaluate "(defstruct bench-test-feed stuck)")
+      (evaluate "(defun bench-test-feed-stuck (feed) (list :wrong feed))")
+      (check "the reply of the request that brings the accessor back says the defun is superseded"
+             (search "defun BENCH-TEST-FEED-STUCK is superseded" (evaluate "(defstruct bench-test-feed stuck)")))
+      (check-equal "the image runs the accessor again" (stuck-of-a-new-feed) 7)
+      (check-equal "only the defstruct is pending" (lisp-ai-bench:pending) (list (list :defstruct (sym "BENCH-TEST-FEED") nil)))
+      (check "save refuses the superseded defun, saying so"
+             (search "superseded" (or (refusal (lambda () (lisp-ai-bench:save accessor :file "src/s.lisp"))) "")))
+      (multiple-value-bind (line saved) (said (lambda () (lisp-ai-bench:save-all :file "src/s.lisp")))
+        (check-equal "save-all saves the defstruct alone" saved (list (sym "BENCH-TEST-FEED")))
+        (check "and a line names the superseded defun" (search "superseded in the image by a later definition: BENCH-TEST-FEED-STUCK" line)))
+      (check "the file has the defstruct" (search "(defstruct bench-test-feed stuck)" (text-of source)))
+      (check "and not the defun" (not (search "(defun bench-test-feed-stuck" (text-of source))))
+      (check-equal "the image still runs the accessor" (stuck-of-a-new-feed) 7)
+      (lisp-ai-bench:drop accessor :unbind t)
+      (check-equal "the superseded defun can be dropped" (lisp-ai-bench::entries-named accessor :state nil) '())
+      (check-equal "and :unbind left the accessor alone" (stuck-of-a-new-feed) 7)
+      (evaluate "(defun bench-test-traced () 1)")
+      (eval (list 'trace traced))
+      (unwind-protect
+           (check-equal "a traced function is still pending" (mapcar #'second (lisp-ai-bench:pending)) (list traced))
+        (eval (list 'untrace traced)))
+      (lisp-ai-bench:drop traced :unbind t))))
+
 (defun run-loose (root)
   "loose-definitions lists a function the image holds and no file holds: one made inside a let, or one dropped from the
    ledger while the image keeps it; not one the ledger lists, nor one loaded from a file. pending-names names the
@@ -275,6 +313,7 @@
           (run-kinds root)
           (run-progn root)
           (run-drop-and-scratch root)
+          (run-superseded root)
           (run-loose root)
           (run-files root))
       (lisp-ai-bench:forget-all)

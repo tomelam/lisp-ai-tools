@@ -664,6 +664,58 @@
       (dolist (symbol (list a b c new)) (when (fboundp symbol) (fmakunbound symbol)))
       (when (boundp p) (makunbound p)))))
 
+(defun run-location-kinds (directory)
+  "An edit does not compile a definition over what the image holds under its name when another sort of definer made that:
+   a defun over a structure's accessor or over a generic function, a defmacro over a function, a defmethod over a plain
+   function. Each is written to the file and reported as skipped, with the reason, and the image keeps what it had. A
+   defun over a function is compiled, as before (run-locations)."
+  (unless (find-package "SLYNK-BACKEND")
+    (incf *failures*)
+    (format t "FAIL: Slynk is not loaded, so the checks of definer kinds did not run~%")
+    (return-from run-location-kinds))
+  (let ((path (merge-pathnames "form-edit-test-kinds.lisp" directory))
+        (accessor (intern "KINDS-TEST-BOX-LID" :cl-user))
+        (generic (intern "KINDS-TEST-GENERIC" :cl-user))
+        (plain (intern "KINDS-TEST-PLAIN" :cl-user))
+        (plain-2 (intern "KINDS-TEST-PLAIN-2" :cl-user)))
+    (unwind-protect
+        (flet ((edited (name old new)
+                 (nth-value 1 (form-edit::edit-subform path name old new)))
+               (reason (name report)
+                 (or (second (assoc name (getf report :skipped))) "")))
+          (write-text path "(in-package :cl-user)
+
+(defun kinds-test-box-lid (box) (list :file box))
+
+(defun kinds-test-generic (x) (list :file x))
+
+(defmacro kinds-test-plain (x) (list 'quote x))
+
+(defmethod kinds-test-plain-2 ((x integer)) (list :file x))
+")
+          (dolist (text '("(defstruct kinds-test-box lid)" "(defgeneric kinds-test-generic (x))"
+                          "(defmethod kinds-test-generic ((x t)) :generic)" "(defun kinds-test-plain (x) (list :plain x))"
+                          "(defun kinds-test-plain-2 (x) (list :plain x))"))
+            (let ((*package* (find-package :cl-user)))
+              (eval (in-cl-user text))))
+          (let ((report (edited "KINDS-TEST-BOX-LID" "(list :file box)" "(list :edited box)")))
+            (check-equal "a defun over a structure's accessor is not compiled" (getf report :registered) 'nil)
+            (check "it is skipped, and the reason names the defstruct" (search "made by a defstruct" (reason accessor report)))
+            (check "the file has the edit" (search "(list :edited box)" (text-of path)))
+            (check-equal "and the image still runs the accessor"
+             (funcall accessor (funcall (intern "MAKE-KINDS-TEST-BOX" :cl-user) :lid 5)) 5))
+          (let ((report (edited "KINDS-TEST-GENERIC" "(list :file x)" "(list :edited x)")))
+            (check "a defun over a generic function is skipped, saying so" (search "a generic function" (reason generic report)))
+            (check-equal "and the image still runs the generic function" (funcall generic 1) :generic))
+          (let ((report (edited "KINDS-TEST-PLAIN" "(list 'quote x)" "(list 'quote (list x))")))
+            (check "a defmacro over a function is skipped, saying so" (search "a function under" (reason plain report)))
+            (check-equal "and the image still runs the function" (funcall plain 1) '(:plain 1)))
+          (let ((report (edited "KINDS-TEST-PLAIN-2" "(list :file x)" "(list :edited x)")))
+            (check "a defmethod over a plain function is skipped, saying so" (search "a function under" (reason plain-2 report)))
+            (check-equal "and the image still runs the function" (funcall plain-2 1) '(:plain 1))))
+      (when (probe-file path) (delete-file path))
+      (dolist (symbol (list generic plain plain-2)) (when (fboundp symbol) (fmakunbound symbol))))))
+
 (defun run-written-forms (directory)
   "edit checks that the forms it wrote read back as the forms meant, not only that the other forms are unchanged. The
    check is broken once on purpose: the printer is made to write a 2 for every 1, which leaves the number of forms and
@@ -750,6 +802,7 @@
     (run-loop-layout directory)
     (run-form-sources directory)
     (run-locations directory)
+    (run-location-kinds directory)
     (run-written-forms directory)
     (run-read-back directory))
   *failures*)

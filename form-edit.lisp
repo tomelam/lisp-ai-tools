@@ -309,8 +309,30 @@
   (cond ((and (symbolp name) name (eq (symbol-package name) scratch)) (intern (symbol-name name) package))
         ((and (consp name) (consp (cdr name))) (list (first name) (real-name (second name) scratch package))) (t name)))
 
+(defun definer-clash (head name)
+  "Why the definition NAME, written by a top-level form whose operator is named HEAD (\"DEFUN\", \"DEFMACRO\",
+   \"DEFGENERIC\" or \"DEFMETHOD\"), is not to be compiled over what the image holds under NAME; NIL when it may be. A
+   DEFUN replaces a function, a DEFMACRO a macro, a DEFGENERIC or DEFMETHOD a generic function; a function that a
+   DEFSTRUCT made (accessor, constructor, predicate, copier) is replaced by none of them. Found when a save compiled a
+   defun of a name the image held as a structure's accessor, and the accessor was gone (the hackathon's meter-feed,
+   2026-11-01)."
+  (let* ((macro (and (symbolp name) (macro-function name)))
+         (held
+          (cond (macro "a macro")
+                ((typep (fdefinition name) 'generic-function) "a generic function")
+                ((let ((transform (sb-int:info :function :source-transform name)))
+                   (and (consp transform) (typep (car transform) 'sb-kernel:defstruct-description)))
+                 "a function made by a defstruct")
+                (t "a function")))
+         (fits
+          (cond ((string= head "DEFMACRO") (string= held "a macro"))
+                ((member head '("DEFGENERIC" "DEFMETHOD") :test #'string=) (string= held "a generic function"))
+                (t (string= held "a function")))))
+    (unless fits
+      (format nil "the image holds ~a under this name, which a ~(~a~) does not replace: not compiled" held head))))
+
 (defun register-locations (path text nodes changed scratch)
-  "Tell the image where the file PATH keeps the definitions among the CHANGED nodes. TEXT is the whole file just written and NODES are its top-level nodes. Each defun, defmacro, defgeneric and defmethod that the image already has is compiled again from its text in the file, with the file name and the position, as Sly's C-c C-c does; then the image knows the file's copy and M-. finds it. A definition the image does not have is not defined: it is reported as skipped. Returns a plist: :registered (names), :skipped ((name reason) ...), :failed ((name compiler output) ...), and :note when nothing could be tried."
+  "Tell the image where the file PATH keeps the definitions among the CHANGED nodes. TEXT is the whole file just written and NODES are its top-level nodes. Each defun, defmacro, defgeneric and defmethod that the image already has is compiled again from its text in the file, with the file name and the position, as Sly's C-c C-c does; then the image knows the file's copy and M-. finds it. A definition the image does not have is not defined: it is reported as skipped. Nor is one compiled over something another sort of definer made, such as a defun over a structure's accessor (DEFINER-CLASH): it is reported as skipped, with the reason. Returns a plist: :registered (names), :skipped ((name reason) ...), :failed ((name compiler output) ...), and :note when nothing could be tried."
   (let ((compile
          (let ((package (find-package "SLYNK-BACKEND")))
            (and package
@@ -330,22 +352,25 @@
                      (and (consp form) (symbolp (car form)) (consp (cdr form))
                           (member (symbol-name (car form)) *definition-heads* :test #'string=))
                    (let ((name (real-name (second form) scratch package)))
-                     (if (not (fboundp name))
-                         (push (list name "not defined in the image") skipped)
-                         (let ((output (make-string-output-stream)) (ok nil))
-                           (let ((*package* package)
-                                 (*standard-output* output)
-                                 (*error-output* output)
-                                 (*compile-verbose* nil)
-                                 (*compile-print* nil))
-                             (handler-bind ((sb-kernel:redefinition-warning #'muffle-warning))
-                               (setf ok
-                                       (funcall compile (subseq text (node-start node) (node-end node)) :buffer
-                                                (file-namestring path) :position (node-start node) :filename
-                                                (namestring (truename path))))))
-                           (if ok
-                               (push name registered)
-                               (push (list name (get-output-stream-string output)) failed))))))))
+                     (cond
+                       ((not (fboundp name)) (push (list name "not defined in the image") skipped))
+                       ((definer-clash (symbol-name (car form)) name)
+                        (push (list name (definer-clash (symbol-name (car form)) name)) skipped))
+                       (t
+                        (let ((output (make-string-output-stream)) (ok nil))
+                          (let ((*package* package)
+                                (*standard-output* output)
+                                (*error-output* output)
+                                (*compile-verbose* nil)
+                                (*compile-print* nil))
+                            (handler-bind ((sb-kernel:redefinition-warning #'muffle-warning))
+                              (setf ok
+                                      (funcall compile (subseq text (node-start node) (node-end node)) :buffer
+                                               (file-namestring path) :position (node-start node) :filename
+                                               (namestring (truename path))))))
+                          (if ok
+                              (push name registered)
+                              (push (list name (get-output-stream-string output)) failed)))))))))
              (list :registered (nreverse registered) :skipped (nreverse skipped) :failed (nreverse failed)))))))
 
 (defun image-form-p (intended read-back scratch package)

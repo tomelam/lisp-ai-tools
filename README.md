@@ -42,7 +42,7 @@ All in `lisp-ai-tools.asd`. A project names the ones it uses in its own `.asd`.
 
 | System | Package | File | What it does |
 | --- | --- | --- | --- |
-| `lisp-ai-tools` | `form-edit` | `form-edit.lisp` | Changes a Lisp file **as forms**: replace, insert, append or delete a top-level form by name, or one subform inside a form; every other byte stays as it was. Before writing it checks that the new forms read back as the forms meant; after writing it reads the file back. It recompiles the written `defun`s from the file with their position, so `M-.` finds them. Uses [Eclector](https://github.com/s-expressionists/Eclector) for subform spans. |
+| `lisp-ai-tools` | `form-edit` | `form-edit.lisp` | Changes a Lisp file **as forms**: replace, insert, append or delete a top-level form by name, or one subform inside a form; every other byte stays as it was. Before writing it checks that the new forms read back as the forms meant; after writing it reads the file back. It recompiles the written `defun`s from the file with their position, so `M-.` finds them, but never over what another sort of definer made (a `defun` over a structure's accessor, say): that one is reported as skipped, with the reason. Uses [Eclector](https://github.com/s-expressionists/Eclector) for subform spans. |
 | `lisp-ai-tools/project` | `lisp-ai-project` | `project.lisp` | Where a project's `rules/` and `data/` are, and how its `.sexp` data files are read. |
 | `lisp-ai-tools/debug` | `lisp-ai-debug` | `debug.lisp` | **Debugging in place.** An error in a `bin/lisp eval` request is not unwound: the reply comes at once as `HELD n` with the restarts and the frames, and the failing thread waits. Commands: `debug-locals`, `debug-eval`, `debug-restart-frame`, `debug-invoke`, `debug-abandon`. Also the eval loop, with the observer the workbench records through. |
 | `lisp-ai-tools/bench` | `lisp-ai-bench` | `bench.lisp` | **The workbench.** The ledger of definitions made in the image, with the text as typed; `pending`, `save`, `save-all`, `drop`, `where`, `run-tests`, `new-file`, `add-component`; `loose-definitions`, the functions the image holds that no file holds and the ledger does not list. |
@@ -65,7 +65,10 @@ repo can run its own gate (below); and `sbcl-restart-frame-bug.md`, a report of 
    which file and offset the image records for a name. `(loose-definitions)` lists the functions of the project's
    package and its tests' package that the image holds, no file holds and the ledger does not list: made inside a
    `let`, an `eval-when` or a function, or dropped without `:unbind` (2026-10-29, from the hackathon, where a race once
-   ended with a program in the image and two lines in its file). `bin/lisp status` shows the names of both kinds.
+   ended with a program in the image and two lines in its file). `bin/lisp status` shows the names of both kinds. An
+   unsaved definition that a later definition of its name replaced in the image, by any definer, is superseded: it
+   leaves `(pending)`, the reply of the request that replaced it says so, and `save-all` names it and leaves it out
+   (2026-11-02, from the hackathon, where a save once compiled such a `defun` back over a structure's accessor).
 3. **Test it there.** `(run-tests)` loads the project's test system inside the image, without reloading source files
    unchanged on disk, so unsaved definitions survive, and runs the suite against what the image holds. It returns the
    failure count. `trace`, `describe`, `inspect`, xref and the `HELD` commands apply as usual.
@@ -81,7 +84,8 @@ purpose. A loose function has no text in the ledger, so `save` cannot write it: 
 `bin/lisp eval`, then save it.
 The ledger is mirrored to `run/pending.sexp` after every change, so a crash still leaves the list of what was lost.
 
-What the workbench refuses, and why: a save into a file that does not exist (`new-file` first); of a definition read in
+What the workbench refuses, and why: a save of a superseded definition, whose text the image no longer runs; a save
+into a file that does not exist (`new-file` first); of a definition read in
 another package than the file's `in-package`; of one made in the `scratch` package; an anchor that is not exactly one
 form of the file. Known limits: a comment after a form's closing parenthesis on the same line is not captured; a
 definition typed at the Sly REPL is not in the ledger, only requests through `bin/lisp eval` are.
