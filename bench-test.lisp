@@ -296,6 +296,105 @@
     (check "a duplicate is refused" (refused-p (lambda () (lisp-ai-bench:add-component "b"))))
     (check "a missing anchor is refused" (refused-p (lambda () (lisp-ai-bench:add-component "e" :after "zz"))))))
 
+(defun fresh-sbcl (directory &rest forms)
+  "Run FORMS (strings) in a fresh SBCL with ASDF, in DIRECTORY, its compiled files kept in DIRECTORY's fasl/; the output."
+  (uiop/run-program:run-program
+   (append
+    (list (namestring sb-ext:*runtime-pathname*) "--noinform" "--non-interactive" "--no-sysinit" "--no-userinit"
+          "--eval" "(require :asdf)" "--eval"
+          (format nil "(asdf:initialize-output-translations '(:output-translations (~s ~s) :inherit-configuration))"
+                  (namestring directory) (namestring (merge-pathnames "fasl/" directory))))
+    (loop for form in forms
+          append (list "--eval" form)))
+   :directory directory :output :string :error-output :output :ignore-error-status t))
+
+(defun run-fresh-load (root)
+  "FRESH-LOAD says :LOADS for files that load, and :DOES-NOT-LOAD, with the error, for files whose forms run before a
+   later file defines what they call (the hackathon's trap of 2026-10-30), which the image itself never notices; it leaves
+   nothing compiled behind; with no system known it says :NOT-CHECKED."
+  (let* ((directory (merge-pathnames "fresh/" root)) (a (merge-pathnames "a.lisp" directory)))
+    (write-text (merge-pathnames "freshproj.asd" directory)
+     "(defsystem \"freshproj\" :components ((:file \"a\") (:file \"b\")))
+")
+    (write-text a "(defpackage :freshproj (:use :cl))
+(in-package :freshproj)
+(defun f () 1)
+")
+    (write-text (merge-pathnames "b.lisp" directory) "(in-package :freshproj)
+(defun g () (f))
+")
+    (check-equal "files that load: :loads" (lisp-ai-bench::fresh-load :system "freshproj" :directory directory) :loads)
+    (check "the compiled files are gone afterwards" (not (probe-file (merge-pathnames "run/fresh-load/" directory))))
+    (check "the output is kept" (probe-file (merge-pathnames "run/fresh-load.log" directory)))
+    (write-text a "(defpackage :freshproj (:use :cl))
+(in-package :freshproj)
+(defun f () 1)
+(defvar *made-too-early* (g))
+")
+    (multiple-value-bind (result what)
+        (lisp-ai-bench::fresh-load :system "freshproj" :directory directory)
+      (check-equal "a form that calls a function of a later file: :does-not-load" result :does-not-load)
+      (check "and the error is given" (and what (search "G" what) (search "undefined" what))))
+    (check-equal "no system known: :not-checked" (lisp-ai-bench::fresh-load :system nil :directory directory)
+     :not-checked)))
+
+(defun run-load-for-image (root)
+  "LOAD-FOR-IMAGE, in a fresh SBCL: a file whose form needs a later file loads whole on a second try, and a line says so;
+   a file that fails for good keeps the forms before the failure, and the files after it load; a file that does not
+   compile is not loaded, not even its stale compiled file (a good version of it is compiled first, so that there is
+   one), and both failures are printed and returned."
+  (let* ((directory (merge-pathnames "broken/" root))
+         (project (namestring (asdf/system:system-relative-pathname "lisp-ai-tools/project" "project.lisp")))
+         (old (merge-pathnames "old.lisp" directory)))
+    (write-text (merge-pathnames "brokenproj.asd" directory)
+     "(defsystem \"brokenproj\" :components ((:file \"package\") (:file \"early\") (:file \"old\") (:file \"fails\") (:file \"late\")))
+")
+    (write-text (merge-pathnames "package.lisp" directory) "(defpackage :brokenproj (:use :cl))
+")
+    (write-text (merge-pathnames "early.lisp" directory) "(in-package :brokenproj)
+(defun before-early () :before)
+(defvar *made-too-early* (defined-late))
+(defun after-early () :after)
+")
+    (write-text old "(in-package :brokenproj)
+(defun old-or-new () :old)
+")
+    (write-text (merge-pathnames "fails.lisp" directory) "(in-package :brokenproj)
+(defun before-failure () :before)
+(error \"this file always fails here\")
+(defun after-failure () :after)
+")
+    (write-text (merge-pathnames "late.lisp" directory) "(in-package :brokenproj)
+(defun defined-late () :late)
+")
+    (fresh-sbcl directory "(asdf:load-asd (truename \"brokenproj.asd\"))"
+     "(handler-bind ((error (lambda (c) (let ((r (find-restart 'asdf:accept c))) (when r (invoke-restart r)))))) (asdf:load-system \"brokenproj\"))")
+    (sleep 1.1)
+    (write-text old "(in-package :brokenproj)
+(defun old-or-new () :new))
+(defun never-read ()
+")
+    (let ((output
+           (fresh-sbcl directory (format nil "(load ~s)" project) "(asdf:load-asd (truename \"brokenproj.asd\"))"
+            "(format t \"~&RETURNED ~s~%\" (lisp-ai-project:load-for-image \"brokenproj\"))"
+            "(format t \"~&IMAGE ~s~%\" (mapcar (lambda (n) (let ((s (find-symbol n :brokenproj))) (and s (fboundp s) (funcall s)))) '(\"BEFORE-EARLY\" \"AFTER-EARLY\" \"OLD-OR-NEW\" \"BEFORE-FAILURE\" \"AFTER-FAILURE\" \"DEFINED-LATE\")))"
+            "(format t \"~&VALUE ~s~%\" (symbol-value (find-symbol \"*MADE-TOO-EARLY*\" :brokenproj)))")))
+      (check "the image came up and answered" (search "IMAGE (" output))
+      (check "the file that needed a later one loaded on the second try, and a line says so"
+       (search ";; loaded on the second try, after the files that follow it: early.lisp" output))
+      (check "and all of it is in the image, its defvar too"
+       (and (search "IMAGE (:BEFORE :AFTER " output) (search "VALUE :LATE" output)))
+      (check
+       "the file that does not compile is reported, and nothing of it is in the image, not its stale compiled file"
+       (and (search ";; LOAD FAILED: old.lisp: " output) (search "It did not compile" output)
+            (search "IMAGE (:BEFORE :AFTER NIL " output)))
+      (check "the file that fails for good is reported, with its error"
+       (search ";; LOAD FAILED: fails.lisp: this file always fails here" output))
+      (check "the forms before the failure are in the image, those after it not, and the files after it are"
+       (search " NIL :BEFORE NIL :LATE)" output))
+      (check "the failures are returned, the compile one first" (search "RETURNED ((\"old.lisp\" :COMPILE " output))
+      (unless (search "IMAGE (" output) (format t "~a~%" output)))))
+
 (defun run (directory)
   "Run every check with a scratch project inside DIRECTORY; returns the number of failures."
   (setf *failures* 0)
@@ -315,7 +414,9 @@
           (run-drop-and-scratch root)
           (run-superseded root)
           (run-loose root)
-          (run-files root))
+          (run-files root)
+          (run-fresh-load root)
+          (run-load-for-image root))
       (lisp-ai-bench:forget-all)
       (setf lisp-ai-bench:*project* old-project)
       (setf lisp-ai-bench::*ledger* old-ledger)

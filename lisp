@@ -6,7 +6,8 @@
 #   eval '(form)' ... evaluate each argument in turn in the project's always-on image, started first when it is down;
 #                     print the values of each
 #   start|stop|status the always-on image (loads bin/serve.lisp, answers on run/lisp.sock); stop refuses while the image
-#                     holds definitions no file holds, unsaved or loose (lisp-ai-bench), stop --discard does not
+#                     holds definitions no file holds, unsaved or loose (lisp-ai-bench), stop --discard does not; start
+#                     keeps the last five logs (run/lisp-server.log.1 is the one before) and warns of files that did not load
 #   test              load the system fresh and run ASDF test-op on SYSTEM/tests
 #   guard             Claude Code PreToolUse hook for Bash, Edit, Write and MultiEdit: the gate (lisp-ai-tools/guard)
 #   mcp               the image as an MCP server for Claude Code (stdio): the script mcp-door beside this one
@@ -32,6 +33,10 @@ start_server() {
   if running; then echo "lisp-server already running (pid $(cat "$pidfile"))"; return 0; fi
   [ -f "$tools/quiet-init.lisp" ] || { echo "lisp: $tools/quiet-init.lisp is missing" >&2; return 1; }
   rm -f run/*.sock "$pidfile"
+  # The last five logs are kept, newest first as run/lisp-server.log.1: the log of an image that died says why, and the
+  # start after it (bin/lisp eval starts a server that is down) used to overwrite it (the hackathon, 2026-10-30).
+  for n in 4 3 2 1; do [ -f "run/lisp-server.log.$n" ] && mv "run/lisp-server.log.$n" "run/lisp-server.log.$((n + 1))"; done
+  [ -f run/lisp-server.log ] && mv run/lisp-server.log run/lisp-server.log.1
   runtime=$(cat rules/sbcl-runtime 2>/dev/null)
   # $runtime is unquoted on purpose: its options are separate words
   nohup "$qlot" exec sbcl $runtime --noinform --userinit "$tools/quiet-init.lisp" --non-interactive \
@@ -53,6 +58,12 @@ start_server() {
       echo "WARNING: Slynk did not start, so Sly cannot connect: see run/lisp-server.log (the port in rules/slynk.sexp is probably taken)" >&2
       ;;
   esac
+  # A file that did not load does not stop the image (lisp-ai-project:load-for-image, called by bin/serve.lisp), but it
+  # must not be silent either
+  if grep -q -e '^;; LOAD FAILED: ' -e '^;; loaded on the second try' run/lisp-server.log; then
+    echo "WARNING: the image came up, but not every file loaded as it should (run/lisp-server.log):" >&2
+    grep -e '^;; LOAD FAILED: ' -e '^;; loaded on the second try' run/lisp-server.log >&2
+  fi
 }
 
 # The workbench's answer to (lisp-ai-bench:pending-names): NIL, a list of names, or anything else when the image cannot
