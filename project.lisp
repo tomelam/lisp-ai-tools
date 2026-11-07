@@ -38,18 +38,27 @@
    failing one are), WHAT the condition's text. Empty when every file loaded.")
 
 (defun component-of-file (system file)
-  "The source file component of the ASDF system SYSTEM whose source or compiled file is FILE, or NIL."
-  (let ((wanted (or (ignore-errors (namestring (truename file))) (ignore-errors (namestring file)))))
+  "The source file component whose source or compiled file is FILE, among the components of the ASDF system SYSTEM and
+   of every other system defined in the same .asd (a project's server system loads its main system as a dependency), or
+   NIL."
+  (let ((wanted (or (ignore-errors (namestring (truename file))) (ignore-errors (namestring file))))
+        (asd (asdf/system:system-source-file (asdf/system:find-system system))))
     (labels ((walk (c)
                (if (typep c 'asdf/component:parent-component)
                    (some #'walk (asdf/component:component-children c))
-                   (and (typep c 'asdf/lisp-action:cl-source-file) wanted
+                   (and (typep c 'asdf/lisp-action:cl-source-file)
                         (member wanted
                                 (cons (namestring (asdf/component:component-pathname c))
                                       (mapcar #'namestring (asdf/action:output-files 'asdf/lisp-action:compile-op c)))
                                 :test #'string=)
                         c))))
-      (and wanted (walk (asdf/system:find-system system))))))
+      (and wanted
+           (some #'walk
+                 (cons (asdf/system:find-system system)
+                       (loop for name in (asdf/system-registry:registered-systems)
+                             for other = (asdf/system:find-system name nil)
+                             when (and other asd (equal (asdf/system:system-source-file other) asd)) collect
+                               other)))))))
 
 (defun load-for-image (system)
   "Load the ASDF system SYSTEM as the always-on image must, so that it comes up even when a file of it does not load. A

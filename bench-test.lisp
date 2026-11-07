@@ -364,6 +364,7 @@
          (old (merge-pathnames "old.lisp" directory)))
     (write-text (merge-pathnames "brokenproj.asd" directory)
      "(defsystem \"brokenproj\" :components ((:file \"package\") (:file \"early\") (:file \"old\") (:file \"fails\") (:file \"late\")))
+(defsystem \"brokenproj/top\" :depends-on (\"brokenproj\") :components ((:file \"top\")))
 ")
     (write-text (merge-pathnames "package.lisp" directory) "(defpackage :brokenproj (:use :cl))
 ")
@@ -380,9 +381,13 @@
 (error \"this file always fails here\")
 (defun after-failure () :after)
 ")
-    (write-text (merge-pathnames "late.lisp" directory) "(in-package :brokenproj)
+    (progn
+     (write-text (merge-pathnames "late.lisp" directory) "(in-package :brokenproj)
 (defun defined-late () :late)
 ")
+     (write-text (merge-pathnames "top.lisp" directory) "(in-package :brokenproj)
+(defun top () :top)
+"))
     (fresh-sbcl directory "(asdf:load-asd (truename \"brokenproj.asd\"))"
      "(handler-bind ((error (lambda (c) (let ((r (find-restart 'asdf:accept c))) (when r (invoke-restart r)))))) (asdf:load-system \"brokenproj\"))")
     (sleep 1.1)
@@ -392,8 +397,8 @@
 ")
     (let ((output
            (fresh-sbcl directory (format nil "(load ~s)" project) "(asdf:load-asd (truename \"brokenproj.asd\"))"
-            "(format t \"~&RETURNED ~s~%\" (lisp-ai-project:load-for-image \"brokenproj\"))"
-            "(format t \"~&IMAGE ~s~%\" (mapcar (lambda (n) (let ((s (find-symbol n :brokenproj))) (and s (fboundp s) (funcall s)))) '(\"BEFORE-EARLY\" \"AFTER-EARLY\" \"OLD-OR-NEW\" \"BEFORE-FAILURE\" \"AFTER-FAILURE\" \"DEFINED-LATE\")))"
+            "(format t \"~&RETURNED ~s~%\" (lisp-ai-project:load-for-image \"brokenproj/top\"))"
+            "(format t \"~&IMAGE ~s~%\" (mapcar (lambda (n) (let ((s (find-symbol n :brokenproj))) (and s (fboundp s) (funcall s)))) '(\"BEFORE-EARLY\" \"AFTER-EARLY\" \"OLD-OR-NEW\" \"BEFORE-FAILURE\" \"AFTER-FAILURE\" \"DEFINED-LATE\" \"TOP\")))"
             "(format t \"~&VALUE ~s~%\" (symbol-value (find-symbol \"*MADE-TOO-EARLY*\" :brokenproj)))")))
       (check "the image came up and answered" (search "IMAGE (" output))
       (check "the file that needed a later one loaded on the second try, and a line says so"
@@ -407,7 +412,7 @@
       (check "the file that fails for good is reported, with its error"
        (search ";; LOAD FAILED: fails.lisp: this file always fails here" output))
       (check "the forms before the failure are in the image, those after it not, and the files after it are"
-       (search " NIL :BEFORE NIL :LATE)" output))
+       (search " NIL :BEFORE NIL :LATE :TOP)" output))
       (check "the failures are returned, the compile one first" (search "RETURNED ((\"old.lisp\" :COMPILE" output))
       (unless (search "IMAGE (" output) (format t "~a~%" output)))))
 
