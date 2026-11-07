@@ -311,8 +311,10 @@
 (defun run-fresh-load (root)
   "FRESH-LOAD says :LOADS for files that load, and :DOES-NOT-LOAD, with the error, for files whose forms run before a
    later file defines what they call (the hackathon's trap of 2026-10-30), which the image itself never notices; it leaves
-   nothing compiled behind; with no system known it says :NOT-CHECKED."
-  (let* ((directory (merge-pathnames "fresh/" root)) (a (merge-pathnames "a.lisp" directory)))
+   nothing compiled behind; with no system known it says :NOT-CHECKED. Each says so in a line."
+  (let* ((directory (merge-pathnames "fresh/" root))
+         (a (merge-pathnames "a.lisp" directory))
+         (lisp-ai-bench::*check-fresh-load* t))
     (write-text (merge-pathnames "freshproj.asd" directory)
      "(defsystem \"freshproj\" :components ((:file \"a\") (:file \"b\")))
 ")
@@ -323,7 +325,12 @@
     (write-text (merge-pathnames "b.lisp" directory) "(in-package :freshproj)
 (defun g () (f))
 ")
-    (check-equal "files that load: :loads" (lisp-ai-bench::fresh-load :system "freshproj" :directory directory) :loads)
+    (let* ((result nil)
+           (line
+            (with-output-to-string (*standard-output*)
+              (setf result (lisp-ai-bench::fresh-load :system "freshproj" :directory directory)))))
+      (check-equal "files that load: :loads" result :loads)
+      (check "and a line says so" (search ";; bench: the files load in a fresh SBCL" line)))
     (check "the compiled files are gone afterwards" (not (probe-file (merge-pathnames "run/fresh-load/" directory))))
     (check "the output is kept" (probe-file (merge-pathnames "run/fresh-load.log" directory)))
     (write-text a "(defpackage :freshproj (:use :cl))
@@ -331,12 +338,21 @@
 (defun f () 1)
 (defvar *made-too-early* (g))
 ")
-    (multiple-value-bind (result what)
-        (lisp-ai-bench::fresh-load :system "freshproj" :directory directory)
+    (let* ((result nil)
+           (what nil)
+           (line
+            (with-output-to-string (*standard-output*)
+              (multiple-value-setq (result what)
+                (lisp-ai-bench::fresh-load :system "freshproj" :directory directory)))))
       (check-equal "a form that calls a function of a later file: :does-not-load" result :does-not-load)
-      (check "and the error is given" (and what (search "G" what) (search "undefined" what))))
-    (check-equal "no system known: :not-checked" (lisp-ai-bench::fresh-load :system nil :directory directory)
-     :not-checked)))
+      (check "and the error is given" (and what (search "G" what) (search "undefined" what)))
+      (check "and a line says so, with the error" (and (search "THE FILES DO NOT LOAD" line) (search what line))))
+    (let* ((result nil)
+           (line
+            (with-output-to-string (*standard-output*)
+              (setf result (lisp-ai-bench::fresh-load :system nil :directory directory)))))
+      (check-equal "no system known: :not-checked" result :not-checked)
+      (check "and a line says so" (search "were not loaded in a fresh SBCL" line)))))
 
 (defun run-load-for-image (root)
   "LOAD-FOR-IMAGE, in a fresh SBCL: a file whose form needs a later file loads whole on a second try, and a line says so;
@@ -392,20 +408,21 @@
        (search ";; LOAD FAILED: fails.lisp: this file always fails here" output))
       (check "the forms before the failure are in the image, those after it not, and the files after it are"
        (search " NIL :BEFORE NIL :LATE)" output))
-      (check "the failures are returned, the compile one first" (search "RETURNED ((\"old.lisp\" :COMPILE " output))
+      (check "the failures are returned, the compile one first" (search "RETURNED ((\"old.lisp\" :COMPILE" output))
       (unless (search "IMAGE (" output) (format t "~a~%" output)))))
 
 (defun run (directory)
   "Run every check with a scratch project inside DIRECTORY; returns the number of failures."
   (setf *failures* 0)
-  (let* ((root (merge-pathnames "bench-test-project/" (uiop:ensure-directory-pathname directory)))
-         (old-project lisp-ai-bench:*project*)
+  (let* ((root (merge-pathnames "bench-test-project/" (uiop/pathname:ensure-directory-pathname directory)))
+         (old-project lisp-ai-bench:*project*) (old-check lisp-ai-bench::*check-fresh-load*)
          (old-ledger (lisp-ai-bench:ledger)))
     (when (probe-file root) (uiop:delete-directory-tree root :validate t))
     (ensure-directories-exist (merge-pathnames "run/" root))
     (unwind-protect
          (progn
-          (setf lisp-ai-bench:*project* root)
+          (setf lisp-ai-bench:*project* root
+                lisp-ai-bench::*check-fresh-load* nil)
           (run-ledger root)
           (run-replace root)
           (run-anchors root)
@@ -418,7 +435,8 @@
           (run-fresh-load root)
           (run-load-for-image root))
       (lisp-ai-bench:forget-all)
-      (setf lisp-ai-bench:*project* old-project)
+      (setf lisp-ai-bench:*project* old-project
+            lisp-ai-bench::*check-fresh-load* old-check)
       (setf lisp-ai-bench::*ledger* old-ledger)
       (dolist (name *names*)
         (let ((symbol (sym name)))

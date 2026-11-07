@@ -509,7 +509,7 @@
             (let* ((at (search "FRESH-LOAD FAILED: " output))
                    (what
                     (if at
-                        (string-trim '(#\  #\Newline) (subseq output (+ at 19)))
+                        (string-trim (list (code-char 32) #\Newline) (subseq output (+ at 19)))
                         (format nil "the fresh SBCL exited with status ~a" status))))
               (format t
                       "~&;; bench: THE FILES DO NOT LOAD in a fresh SBCL (~,1f s): ~a~%;; bench: bin/lisp test fails the same way, and the next start of the image reports it; the whole output is in ~a~%"
