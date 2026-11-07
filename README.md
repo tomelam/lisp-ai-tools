@@ -43,7 +43,7 @@ All in `lisp-ai-tools.asd`. A project names the ones it uses in its own `.asd`.
 | System | Package | File | What it does |
 | --- | --- | --- | --- |
 | `lisp-ai-tools` | `form-edit` | `form-edit.lisp` | Changes a Lisp file **as forms**: replace, insert, append or delete a top-level form by name, or one subform inside a form; every other byte stays as it was. Before writing it checks that the new forms read back as the forms meant; after writing it reads the file back. It recompiles the written `defun`s from the file with their position, so `M-.` finds them, but never over what another sort of definer made (a `defun` over a structure's accessor, say): that one is reported as skipped, with the reason. Uses [Eclector](https://github.com/s-expressionists/Eclector) for subform spans. |
-| `lisp-ai-tools/project` | `lisp-ai-project` | `project.lisp` | Where a project's `rules/` and `data/` are, and how its `.sexp` data files are read. |
+| `lisp-ai-tools/project` | `lisp-ai-project` | `project.lisp` | Where a project's `rules/` and `data/` are, and how its `.sexp` data files are read. `load-for-image`, which a project's `bin/serve.lisp` loads the system with, so that the image comes up even when a file does not load: a file that fails is passed over, loaded once more after the rest, and reported on a line that begins `LOAD FAILED`, which `bin/lisp start` repeats; a file that does not compile is not loaded, not even its stale compiled file. |
 | `lisp-ai-tools/debug` | `lisp-ai-debug` | `debug.lisp` | **Debugging in place.** An error in a `bin/lisp eval` request is not unwound: the reply comes at once as `HELD n` with the restarts and the frames, and the failing thread waits. Commands: `debug-locals`, `debug-eval`, `debug-restart-frame`, `debug-invoke`, `debug-abandon`. Also the eval loop, with the observer the workbench records through. |
 | `lisp-ai-tools/bench` | `lisp-ai-bench` | `bench.lisp` | **The workbench.** The ledger of definitions made in the image, with the text as typed; `pending`, `save`, `save-all`, `drop`, `where`, `run-tests`, `new-file`, `add-component`; `loose-definitions`, the functions the image holds that no file holds and the ledger does not list. |
 | `lisp-ai-tools/guard` | `lisp-ai-guard` | `guard.lisp` | **The gate.** The one Claude Code PreToolUse hook, for `Bash` and for `Edit`, `Write` and `MultiEdit`. The image answers hook payloads on its socket with the marker `OK:`. |
@@ -75,7 +75,10 @@ repo can run its own gate (below); and `sbcl-restart-frame-bug.md`, a report of 
 4. **Save it.** `(save 'fish-glyph)` writes the text as typed into the file the image knows for it; `(save 'new-fn
    :file "src/x.lisp" :after "OTHER-FN")` places a new one; `(save-all)` saves everything pending, oldest first. A save
    that would drop a comment or a docstring the file's definition already has is refused and names it;
-   `:drop-comments t` or `:drop-docstring t` says it is meant. New files: `(new-file "src/y.lisp")` and
+   `:drop-comments t` or `:drop-docstring t` says it is meant. After the last write the project's files are loaded in a
+   fresh SBCL, as `bin/lisp test` loads them but without the tests (about a second), and the reply says whether they
+   load: the image never notices that its files no longer load, as when a saved `defvar` calls a function of a later
+   file. `lisp-ai-bench::*check-fresh-load*` set to NIL turns it off. New files: `(new-file "src/y.lisp")` and
    `(add-component "y" :after "x")`, which edits the `.asd` as forms.
 5. **Prove it from the files.** `bin/lisp test` loads the files into a fresh SBCL and runs the suite. Then commit.
 

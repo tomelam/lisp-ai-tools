@@ -3,9 +3,8 @@
 ;;;; project's run/), calls (funcall START path) for a server of the project that listens on a socket there and (funcall STOP
 ;;;; server) to end it, and returns how many checks failed, printing a line for each. A fake qlot (the script runs $QLOT to start
 ;;;; the image) stands in for the start. Three cases: a healthy server is asked and nothing is started; a server that is down,
-;;;; with a stale socket left behind, is reported as down, started, and then gives its answer; a start that fails is a loud
-;;;; failure, not a silent one.
-
+;;;; with a stale socket left behind, is reported as down, started, and then gives its answer, the start keeping the earlier
+;;;; logs and repeating the line of a file that did not load; a start that fails is a loud failure, not a silent one.
 (defpackage :lisp-ai-script-tests
   (:use :cl)
   (:export #:run))
@@ -93,9 +92,15 @@
           (funcall stop server)))
       ;; 2: a server that is down, with a stale socket left behind, is started, and then answers
       (tree *fake-start-and-wait*)
-      (let ((stale (make-instance 'sb-bsd-sockets:local-socket :type :stream)))
-        (sb-bsd-sockets:socket-bind stale path)
-        (sb-bsd-sockets:socket-close stale))
+      (progn
+       (fake-qlot qlot (cons "echo ';; LOAD FAILED: src/x.lisp: boom.'" *fake-start-and-wait*))
+       (with-open-file (out (concatenate 'string root "run/lisp-server.log") :direction :output :if-exists :supersede)
+         (write-string "the log of the image before" out))
+       (with-open-file (out (concatenate 'string root "run/lisp-server.log.1") :direction :output :if-exists :supersede)
+         (write-string "the log before that" out))
+       (let ((stale (make-instance 'sb-bsd-sockets:local-socket :type :stream)))
+         (sb-bsd-sockets:socket-bind stale path)
+         (sb-bsd-sockets:socket-close stale)))
       (check "the stale socket is there before eval runs" (probe-file path))
       (let ((process (uiop:launch-program (eval-command qlot) :directory root :output :stream :error-output :stream))
             (server nil))
@@ -108,7 +113,14 @@
                  (check-equal "eval after a start prints the value"
                               (uiop:slurp-input-stream 'string (uiop:process-info-output process)) (format nil "42~%"))
                  (let ((err (uiop:slurp-input-stream 'string (uiop:process-info-error-output process))))
-                   (check "eval says on stderr that the server was down" (search "was down" err))
+                   (progn
+                    (check "eval says on stderr that the server was down" (search "was down" err))
+                    (check "the start says on stderr that a file did not load, and which"
+                     (and (search "not every file loaded" err) (search "LOAD FAILED: src/x.lisp: boom." err)))
+                    (check-equal "the start keeps the log of the image before as run/lisp-server.log.1"
+                     (uiop/stream:read-file-string (concatenate 'string root "run/lisp-server.log.1")) "the log of the image before")
+                    (check-equal "and the one before that as run/lisp-server.log.2"
+                     (uiop/stream:read-file-string (concatenate 'string root "run/lisp-server.log.2")) "the log before that"))
                    (check "stderr holds what the start said, stdout does not" (search "lisp-server started" err)))
                  (check-equal "eval after a start exits 0" code 0)))
           (when server (funcall stop server))
