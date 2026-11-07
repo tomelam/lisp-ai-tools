@@ -118,9 +118,11 @@
                     (check "the start says on stderr that a file did not load, and which"
                      (and (search "not every file loaded" err) (search "LOAD FAILED: src/x.lisp: boom." err)))
                     (check-equal "the start keeps the log of the image before as run/lisp-server.log.1"
-                     (uiop/stream:read-file-string (concatenate 'string root "run/lisp-server.log.1")) "the log of the image before")
+                     (let ((log (probe-file (concatenate 'string root "run/lisp-server.log.1"))))
+                       (and log (uiop/stream:read-file-string log))) "the log of the image before")
                     (check-equal "and the one before that as run/lisp-server.log.2"
-                     (uiop/stream:read-file-string (concatenate 'string root "run/lisp-server.log.2")) "the log before that"))
+                     (let ((log (probe-file (concatenate 'string root "run/lisp-server.log.2"))))
+                       (and log (uiop/stream:read-file-string log))) "the log before that"))
                    (check "stderr holds what the start said, stdout does not" (search "lisp-server started" err)))
                  (check-equal "eval after a start exits 0" code 0)))
           (when server (funcall stop server))
