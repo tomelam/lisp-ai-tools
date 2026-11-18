@@ -129,5 +129,5 @@
             do
               (format t
                       "~&;; LOAD FAILED: ~a: ~a. ~:[What follows the failing form in it is not in this image~;It did not compile (the compiler's messages above say why), so nothing of it is in this image~].~%"
-                      file what (eq phase :compile)))
+                      file (string-right-trim "." what) (eq phase :compile)))
       *load-failures*)))
