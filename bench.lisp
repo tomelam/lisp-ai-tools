@@ -444,6 +444,78 @@
     (form-edit::verify-written path result)
     (form-edit::register-locations path result result-nodes (form-edit::changed-nodes untouched result-nodes) scratch)))
 
+;;; After a save the files are loaded in a fresh SBCL. The image never notices that its files no longer load: in the
+;;; hackathon's rerun chain 2 (2026-10-30) a saved (defvar *mr-before* (meter-report ...)), listed before the file that
+;;; defines METER-REPORT, was found only by the check after the race, a fresh SBCL loading the files.
+(defvar *check-fresh-load*
+  t
+  "When true, SAVE and SAVE-ALL end by loading the project's files in a fresh SBCL (FRESH-LOAD) and saying whether they
+   load. SAVE-ALL checks once, after its last save.")
+
+(defun project-system ()
+  "The name of the project's ASDF system, a string: the project's name when the project is named by its system, else the
+   name of the one .asd in its directory. NIL when there is none or more than one."
+  (let ((project (project)))
+    (if (symbolp project)
+        (string-downcase (symbol-name project))
+        (let ((files (directory (merge-pathnames "*.asd" (project-directory)))))
+          (and (= (length files) 1) (pathname-name (first files)))))))
+
+(defun fresh-load (&key (system (project-system)) (directory (project-directory)))
+  "Load the ASDF system SYSTEM from the files in DIRECTORY in a fresh SBCL, as bin/lisp test loads it (strictly: a file
+   whose compiling warns fails) but without the tests, and print a line saying whether it loaded and how long that took.
+   Returns :LOADS; :DOES-NOT-LOAD with the condition's text as a second value; or :NOT-CHECKED when no system is known.
+   The files of DIRECTORY are compiled into run/fresh-load/, deleted afterwards, so nothing compiled here is mixed with
+   what this image loaded; the whole output of the fresh SBCL is kept in run/fresh-load.log. The libraries come from the
+   project's Qlot install (.qlot/setup.lisp) when it has one."
+  (unless system
+    (format t "~&;; bench: the files were not loaded in a fresh SBCL: no ASDF system is known for ~a~%" directory)
+    (return-from fresh-load :not-checked))
+  (let* ((directory (uiop/pathname:ensure-directory-pathname directory))
+         (output-directory (merge-pathnames "run/fresh-load/" directory))
+         (log (merge-pathnames "run/fresh-load.log" directory))
+         (setup (probe-file (merge-pathnames ".qlot/setup.lisp" directory)))
+         (quiet (ignore-errors (probe-file (asdf/system:system-relative-pathname "lisp-ai-tools" "quiet-init.lisp"))))
+         (start (get-internal-real-time)))
+    (ensure-directories-exist log)
+    (multiple-value-bind (output error-output status)
+        (unwind-protect
+            (uiop/run-program:run-program
+             (append (list (namestring sb-ext:*runtime-pathname*) "--noinform" "--non-interactive" "--no-sysinit")
+                     (if quiet
+                         (list "--userinit" (namestring quiet))
+                         (list "--no-userinit"))
+                     (if setup
+                         (list "--load" (namestring setup))
+                         (list "--eval" "(require :asdf)"))
+                     (list "--eval"
+                           (format nil
+                                   "(asdf:initialize-output-translations '(:output-translations (~s ~s) :inherit-configuration))"
+                                   (namestring directory) (namestring output-directory))
+                           "--eval"
+                           (format nil "(asdf:load-asd ~s)"
+                                   (namestring (merge-pathnames (format nil "~a.asd" system) directory)))
+                           "--eval"
+                           (format nil
+                                   "(handler-case (progn (asdf:load-system ~s) (uiop:quit 0)) (serious-condition (c) (format t \"~~&FRESH-LOAD FAILED: ~~a~~%\" c) (finish-output) (uiop:quit 1)))"
+                                   system)))
+             :directory directory :output :string :error-output :string :ignore-error-status t)
+          (when (probe-file output-directory) (uiop/filesystem:delete-directory-tree output-directory :validate t)))
+      (with-open-file (out log :direction :output :if-exists :supersede :external-format :utf-8)
+        (format out "~a~%~a" output error-output))
+      (let ((seconds (/ (round (- (get-internal-real-time) start) (/ internal-time-units-per-second 10)) 10.0)))
+        (if (eql status 0)
+            (progn (format t "~&;; bench: the files load in a fresh SBCL (~,1f s)~%" seconds) :loads)
+            (let* ((at (search "FRESH-LOAD FAILED: " output))
+                   (what
+                    (if at
+                        (string-trim (list (code-char 32) #\Newline) (subseq output (+ at 19)))
+                        (format nil "the fresh SBCL exited with status ~a" status))))
+              (format t
+                      "~&;; bench: THE FILES DO NOT LOAD in a fresh SBCL (~,1f s): ~a~%;; bench: bin/lisp test fails the same way, and the next start of the image reports it; the whole output is in ~a~%"
+                      seconds what (enough-namestring log directory))
+              (values :does-not-load what)))))))
+
 (defun save (name &key file after before drop-comments drop-docstring)
   "Write the unsaved definition NAME into FILE (default: the file the image recorded for it; none known is an error that
    says to give :file), as it was typed, comments and docstring included. A definition the file already has is replaced in
@@ -452,7 +524,9 @@
    the new text lacks, or a docstring the new form lacks (DROP-COMMENTS and DROP-DOCSTRING say it is meant); when the
    definition was made in the SCRATCH package; when FILE does not exist (new-file first). Several unsaved definitions of
    one name (methods) are all saved. Returns the file and the register report of the last one.
-   A superseded definition (SUPERSEDED-P) is refused, and nothing written: it would put back text the image no longer runs."
+   A superseded definition (SUPERSEDED-P) is refused, and nothing written: it would put back text the image no longer runs.
+   Then, when *CHECK-FRESH-LOAD* is true, the project's files are loaded in a fresh SBCL (FRESH-LOAD) and a line says
+   whether they load; what FRESH-LOAD returned is the third value (:NOT-CHECKED when it was not run)."
   (let ((entries (entries-named name)) (path nil) (report nil))
     (unless entries
       (when (entries-named name :state :superseded)
@@ -514,24 +588,34 @@
       (setf (entry-state entry) :saved
             (entry-file entry) path)
       (persist))
-    (values path report)))
+    (values path report
+            (if *check-fresh-load*
+                (fresh-load)
+                :not-checked))))
 
 (defun save-all (&key file)
   "Save every unsaved definition, oldest first, each to its known file, or to FILE when none is known. Stops at the first
-   refusal, saying which were saved. The superseded ones (SUPERSEDED-P) are not saved, and a line names them. Returns the
-   names saved."
-  (let ((saved '()))
-    (handler-bind ((error (lambda (e)
-                            (when saved (format t "~&;; saved before the refusal: ~{~a~^, ~}~%" (reverse saved)))
-                            (error e))))
-      (loop for entry = (first (entries)) while entry
-            do (save (entry-name entry) :file (and (null (entry-file entry)) file))
-               (push (entry-name entry) saved)))
+   refusal, saying which were saved. The superseded ones (SUPERSEDED-P) are not saved, and a line names them. Then, when
+   anything was saved and *CHECK-FRESH-LOAD* is true, the files are loaded once in a fresh SBCL (FRESH-LOAD). Returns
+   the names saved, and as a second value what FRESH-LOAD returned (:NOT-CHECKED when it was not run)."
+  (let ((saved 'nil) (check *check-fresh-load*))
+    (let ((*check-fresh-load* nil))
+      (handler-bind ((error
+                      (lambda (e)
+                        (when saved (format t "~&;; saved before the refusal: ~{~a~^, ~}~%" (reverse saved)))
+                        (error e))))
+        (loop for entry = (first (entries))
+              while entry
+              do (save (entry-name entry) :file (and (null (entry-file entry)) file))
+                (push (entry-name entry) saved))))
     (let ((superseded (entries :state :superseded)))
       (when superseded
         (format t "~&;; bench: not saved, superseded in the image by a later definition: ~{~a~^, ~}~%"
                 (mapcar (lambda (e) (name-string (entry-name e))) superseded))))
-    (nreverse saved)))
+    (values (nreverse saved)
+            (if (and saved check)
+                (fresh-load)
+                :not-checked))))
 
 ;;; New files and the .asd
 
