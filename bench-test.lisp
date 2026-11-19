@@ -296,6 +296,29 @@
     (check "a duplicate is refused" (refused-p (lambda () (lisp-ai-bench:add-component "b"))))
     (check "a missing anchor is refused" (refused-p (lambda () (lisp-ai-bench:add-component "e" :after "zz"))))))
 
+(defun run-asdf-sees (root)
+  "add-component makes ASDF read the .asd again. Two add-components in one request, the second naming the .asd's other
+   defsystem, leave ASDF holding both new files: ASDF's own check compares the .asd's date in whole seconds, and missed an
+   edit made in the second it last read the file (omnifocus, 2026-11-16). The systems that add-component made ASDF read
+   here and in run-files are cleared afterwards."
+  (let ((asd (merge-pathnames "two/twoproj.asd" root)))
+    (write-text asd "(defsystem \"twoproj\" :components ((:module \"src\" :components ((:file \"a\")))))
+
+(defsystem \"twoproj/tests\" :depends-on (\"twoproj\") :components ((:module \"tests\" :components ((:file \"t1\")))))
+")
+    (unwind-protect
+        (progn
+         (asdf/find-system:load-asd asd)
+         (lisp-ai-bench:add-component "b" :module "src" :system "twoproj")
+         (lisp-ai-bench:add-component "t2" :module "tests" :system "twoproj/tests")
+         (flet ((files (system module)
+                  (mapcar #'asdf/component:component-name
+                          (asdf/component:component-children
+                           (asdf/component:find-component (asdf/system:find-system system) module)))))
+           (check-equal "ASDF holds the file added to the first defsystem" (files "twoproj" "src") '("a" "b"))
+           (check-equal "and the file added to the second" (files "twoproj/tests" "tests") '("t1" "t2"))))
+      (dolist (system '("benchproj" "twoproj" "twoproj/tests")) (asdf/system-registry:clear-system system)))))
+
 (defun fresh-sbcl (directory &rest forms)
   "Run FORMS (strings) in a fresh SBCL with ASDF, in DIRECTORY, its compiled files kept in DIRECTORY's fasl/; the output."
   (uiop/run-program:run-program
@@ -437,6 +460,7 @@
           (run-superseded root)
           (run-loose root)
           (run-files root)
+          (run-asdf-sees root)
           (run-fresh-load root)
           (run-load-for-image root))
       (lisp-ai-bench:forget-all)

@@ -643,7 +643,10 @@
 (defun add-component (name &key after (module "src") system)
   "Add (:file NAME) to the :components of the module MODULE (default \"src\") of the system SYSTEM (default: the one .asd of
    the project, its first defsystem) in the project's .asd, after the file AFTER or at the end. Refused when the file is
-   there already. The .asd is edited as forms (form-edit::edit-subform), so the rest of it stays byte for byte."
+   there already. The .asd is edited as forms (form-edit::edit-subform), so the rest of it stays byte for byte.
+   Then the .asd is loaded again (asdf:load-asd), so that ASDF holds the new file at once: ASDF's own check compares the
+   .asd's date in whole seconds, and missed an edit made in the second it last read the file (two add-components in one
+   request, the second naming a system, which made ASDF read the .asd between them; omnifocus, 2026-11-16)."
   (let* ((path (system-file system)))
     (form-edit::with-scratch-package (scratch)
       (let* ((text (form-edit::file-text path))
@@ -677,12 +680,15 @@
                         (unless at (error "bench: no (:file ~s) in the module ~s to insert after" after module))
                         (append (subseq components 0 (1+ at)) (list new) (subseq components (1+ at))))
                       (append components (list new))))
-                 (new-module (let ((copy (copy-list module-form)))
-                               (setf (getf (cddr copy) :components) new-components)
-                               copy))
+                 (new-module
+                  (let ((copy (copy-list module-form)))
+                    (setf (getf (cddr copy) :components) new-components)
+                    copy))
                  (old-text (subseq text (form-edit::node-start module-node) (form-edit::node-end module-node))))
-            (form-edit::edit-subform path system-name old-text (let ((*package* scratch) (*print-case* :downcase))
-                                                                  (prin1-to-string new-module)))
+            (form-edit::edit-subform path system-name old-text
+                                     (let ((*package* scratch) (*print-case* :downcase))
+                                       (prin1-to-string new-module)))
+            (asdf/find-system:load-asd path)
             path))))))
 
 (defun all-sub-nodes (node)
