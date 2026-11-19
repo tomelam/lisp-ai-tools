@@ -53,6 +53,16 @@
   "The number of the first frame of held session ID whose text mentions NAME."
   (car (find-if (lambda (frame) (search name (cdr frame))) (lisp-ai-debug:debug-frames id 30))))
 
+(defun sessions-in-use ()
+  "How many debug sessions are not finished: the ones that count against the limit, as open-session counts them."
+  (let ((n 0))
+    (maphash
+     (lambda (id session)
+       (declare (ignore id))
+       (unless (eq (lisp-ai-debug::session-state session) :finished) (incf n)))
+     lisp-ai-debug::*sessions*)
+    n))
+
 ;;; Functions that fail. Each calls the failing function inside a LIST, so its frame is not replaced by a tail call.
 (defun debug-broken (x) (let ((y (* x 2))) (list :broken (/ 100 (- y 4)))))
 (defun debug-outer (x) (list :outer (debug-broken x)))
@@ -65,9 +75,8 @@
 
 (defun run (directory start stop)
   (setf *failures* 0)
-  (let* ((path (namestring (merge-pathnames "test-debug.sock" directory)))
-         (server (funcall start path))
-         (timeout lisp-ai-debug::*held-timeout*))
+  (let* ((path (namestring (merge-pathnames "test-debug.sock" directory))) (server (funcall start path))
+         (timeout lisp-ai-debug::*held-timeout*) (broken (fdefinition 'debug-broken)))
     (unwind-protect
          (progn
           (check-equal "a request that succeeds is answered as before" (socket-request path "(+ 1 2)") (format nil "3~%"))
@@ -133,12 +142,16 @@
               (check-equal "abandoning ends the request with the ERROR: line" (printed (lisp-ai-debug:debug-abandon id))
                            (format nil "ERROR: boom~%"))))
           ;; the limit: the fifth error is not held
-          (let* ((replies (loop repeat (1+ lisp-ai-debug::*held-limit*) collect (socket-request path "(error \"x\")")))
+          (let* ((before (sessions-in-use)) (all (hash-table-count lisp-ai-debug::*sessions*))
+                 (replies
+                  (loop repeat (1+ lisp-ai-debug::*held-limit*)
+                        collect (socket-request path "(error \"x\")")))
                  (ids (remove nil (mapcar #'held-id replies))))
-            (check-equal "up to the limit errors are held" (length ids) lisp-ai-debug::*held-limit*)
+            (check-equal "up to the limit errors are held, less those held before" (length ids)
+             (- lisp-ai-debug::*held-limit* before))
             (check-equal "one more is an ordinary ERROR: reply" (car (last replies)) (format nil "ERROR: x~%"))
             (dolist (id ids) (printed (lisp-ai-debug:debug-abandon id)))
-            (check-equal "all sessions end" (hash-table-count lisp-ai-debug::*sessions*) 0))
+            (check-equal "all its sessions end" (hash-table-count lisp-ai-debug::*sessions*) all))
           ;; a thread nobody answers is abandoned after the timeout
           (setf lisp-ai-debug::*held-timeout* 1)
           (let* ((reply (socket-request path "(error \"slow\")"))
@@ -150,7 +163,9 @@
                 (check "and its reply ends with the error" (search "ERROR: slow" text)))))
           (check-equal "a session that does not exist is said so" (printed (lisp-ai-debug:debug-frames 99999))
                        (format nil ";; no session 99999~%")))
-      (setf lisp-ai-debug::*held-timeout* timeout)
+      (setf lisp-ai-debug::*held-timeout* timeout
+            (fdefinition 'debug-broken) broken
+            *still-broken* t)
       (funcall stop server)
       (when (probe-file path) (delete-file path))))
   *failures*)
