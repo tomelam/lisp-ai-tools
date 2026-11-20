@@ -89,7 +89,10 @@
       (check "the new form comes after it" (< (search "bench-test-other" text) (search "bench-test-f" text))))
     (check-equal "nothing is pending after the save" (lisp-ai-bench:pending) '())
     (check "the mirror is empty too" (not (search "BENCH-TEST-F" (text-of mirror))))
-    (check-equal "where gives the file" (ignore-errors (truename (lisp-ai-bench:where (sym "BENCH-TEST-F")))) (truename source))
+    (multiple-value-bind (file offset)
+        (lisp-ai-bench:where (sym "BENCH-TEST-F"))
+      (check-equal "where gives the file" (ignore-errors (truename file)) (truename source))
+      (check-equal "and the offset of the form in it" offset (search "(defun bench-test-f" (text-of source))))
     (check-equal "the file reads as two definitions" (length (forms-of source)) 3)))
 
 (defun run-replace (root)

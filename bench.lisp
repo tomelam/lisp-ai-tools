@@ -118,14 +118,21 @@
     (:defsetf '(:setf-expander)) (:define-setf-expander '(:setf-expander)) (t '())))
 
 (defun recorded-source (name kind)
-  "(values pathname offset) that the image records for the definition NAME of KIND, or NIL."
+  "(values pathname offset) that the image records for the definition NAME of KIND, or NIL. A definition compiled from
+   a string, as form-edit registers one through Slynk, records its offset within that string, and the string's place in
+   the file as :emacs-position; the two are added, as M-. does (in paip-gps, 2026-10-24, where said 0 after a save)."
   (when (or (symbolp name) (and (consp name) (eq (first name) 'setf)))
     (dolist (type (introspect-types kind))
       (dolist (source (ignore-errors (sb-introspect:find-definition-sources-by-name name type)))
         (let ((path (sb-introspect:definition-source-pathname source)))
           (when path
             (return-from recorded-source
-              (values path (sb-introspect:definition-source-character-offset source)))))))))
+              (let ((offset (sb-introspect:definition-source-character-offset source))
+                    (position (getf (sb-introspect:definition-source-plist source) :emacs-position)))
+                (values path
+                        (if (and offset position)
+                            (+ offset position)
+                            offset))))))))))
 
 (defun image-object (kind name)
   "What the image runs under NAME for a definition of KIND, seen through TRACE and any other encapsulation: the macro
