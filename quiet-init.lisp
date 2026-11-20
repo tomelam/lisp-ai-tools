@@ -2,8 +2,10 @@
 ;;;;
 ;;;; Qlot loads its own, newer UIOP over the one SBCL ships, and Slynk redefines a method, so every start of an image used
 ;;;; to print about 480 lines of "WARNING: redefining UIOP/...". Nobody acts on them. This mutes a redefinition warning
-;;;; when the function redefined belongs to a library (UIOP, ASDF, Slynk, Eclector) and no other: a function of the
-;;;; project defined twice, or a project function redefined by mistake, is still reported. Nothing else is muted.
+;;;; when the function redefined belongs to a library (UIOP, ASDF, Slynk, Eclector, Quicklisp's QL-DIST) and no other: a
+;;;; function of the project defined twice, or a project function redefined by mistake, is still reported. Nothing else
+;;;; is muted. (QL-DIST: Qlot's cache code, .qlot/local-init/qlot-30-cache.lisp, defines an :around method on
+;;;; QL-DIST:INSTALL, and during qlot install it is defined a second time, 2026-11-20.)
 ;;;;
 ;;;; ~/.sbclrc does not exist on this machine, so this file takes the place of nothing.
 
@@ -12,7 +14,7 @@
 
 (in-package :quiet-init)
 
-(defparameter *library-package-prefixes* '("UIOP" "ASDF" "SLYNK" "ECLECTOR")
+(defparameter *library-package-prefixes* '("UIOP" "ASDF" "SLYNK" "ECLECTOR" "QL-DIST")
   "A package is a library's when its name is one of these or begins with one followed by a slash, a hyphen or a dot.")
 
 (defun library-package-p (package)
