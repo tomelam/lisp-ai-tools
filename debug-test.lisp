@@ -73,13 +73,34 @@
 (defvar *addend* :a)
 (defun debug-typed (x) (list :typed (+ x *addend*)))
 
+(defvar *read-ran* nil "Set by a form of a request that must not run, since the request does not read.")
+
+(defun run-reading (path)
+  "A request that reads is answered; one that does not read is refused whole, before any of its forms runs, and is not
+   held; a form may still name a package that a form before it in the request makes."
+  (check-equal "a request that succeeds is answered as before" (socket-request path "(+ 1 2)") (format nil "3~%"))
+  (let* ((before (sessions-in-use))
+         (reply (socket-request path (format nil "(setf lisp-ai-debug-tests::*read-ran* t)~%(+ 1 2))"))))
+    (check "a request that does not read is refused, and the reply's first line says so"
+     (eql 0 (search "ERROR: the request does not read, so none of its forms was evaluated: unmatched close" reply)))
+    (check "with the line and the column" (search (format nil "at line 2, column 8~%") reply))
+    (check "none of its forms ran" (not *read-ran*))
+    (check "and nothing is held" (and (not (held-id reply)) (= before (sessions-in-use)))))
+  (check "a request that ends inside a form is refused"
+   (search "it ends inside a form or a string, at line 1, column 6" (socket-request path "(+ 1 2")))
+  (unwind-protect
+      (check-equal "a form may still name a package that a form before it makes"
+       (socket-request path "(defpackage :lisp-ai-debug-tests-later) 'lisp-ai-debug-tests-later::y")
+       (format nil "#<PACKAGE \"LISP-AI-DEBUG-TESTS-LATER\">~%LISP-AI-DEBUG-TESTS-LATER::Y~%"))
+    (when (find-package :lisp-ai-debug-tests-later) (delete-package :lisp-ai-debug-tests-later))))
+
 (defun run (directory start stop)
   (setf *failures* 0)
   (let* ((path (namestring (merge-pathnames "test-debug.sock" directory))) (server (funcall start path))
          (timeout lisp-ai-debug::*held-timeout*) (broken (fdefinition 'debug-broken)))
     (unwind-protect
          (progn
-          (check-equal "a request that succeeds is answered as before" (socket-request path "(+ 1 2)") (format nil "3~%"))
+          (run-reading path)
           ;; an error is held: the reply is at once, and the thread waits
           (let* ((reply (socket-request path "(progn (format t \"before~%\") (lisp-ai-debug-tests::debug-outer 2))"))
                  (id (held-id reply)))
