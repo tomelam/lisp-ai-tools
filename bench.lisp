@@ -118,14 +118,21 @@
     (:defsetf '(:setf-expander)) (:define-setf-expander '(:setf-expander)) (t '())))
 
 (defun recorded-source (name kind)
-  "(values pathname offset) that the image records for the definition NAME of KIND, or NIL."
+  "(values pathname offset) that the image records for the definition NAME of KIND, or NIL. A definition compiled from
+   a string, as form-edit registers one through Slynk, records its offset within that string, and the string's place in
+   the file as :emacs-position; the two are added, as M-. does (in paip-gps, 2026-10-24, where said 0 after a save)."
   (when (or (symbolp name) (and (consp name) (eq (first name) 'setf)))
     (dolist (type (introspect-types kind))
       (dolist (source (ignore-errors (sb-introspect:find-definition-sources-by-name name type)))
         (let ((path (sb-introspect:definition-source-pathname source)))
           (when path
             (return-from recorded-source
-              (values path (sb-introspect:definition-source-character-offset source)))))))))
+              (let ((offset (sb-introspect:definition-source-character-offset source))
+                    (position (getf (sb-introspect:definition-source-plist source) :emacs-position)))
+                (values path
+                        (if (and offset position)
+                            (+ offset position)
+                            offset))))))))))
 
 (defun image-object (kind name)
   "What the image runs under NAME for a definition of KIND, seen through TRACE and any other encapsulation: the macro
@@ -621,7 +628,8 @@
 
 (defun new-file (file &key package header)
   "Make the source file FILE (relative to the project) with a header comment and an in-package form for PACKAGE (default:
-   the project's package, named like the project). Refused when the file exists."
+   the project's package, named like the project). Refused when the file exists. HEADER, when given, must be comment
+   text (each line beginning with ;): anything else is refused, and no file is made."
   (let ((path (resolve file))
         (package (or package (project))))
     (when (probe-file path) (error "bench: ~a exists already" path))
@@ -643,7 +651,10 @@
 (defun add-component (name &key after (module "src") system)
   "Add (:file NAME) to the :components of the module MODULE (default \"src\") of the system SYSTEM (default: the one .asd of
    the project, its first defsystem) in the project's .asd, after the file AFTER or at the end. Refused when the file is
-   there already. The .asd is edited as forms (form-edit::edit-subform), so the rest of it stays byte for byte."
+   there already. The .asd is edited as forms (form-edit::edit-subform), so the rest of it stays byte for byte.
+   Then the .asd is loaded again (asdf:load-asd), so that ASDF holds the new file at once: ASDF's own check compares the
+   .asd's date in whole seconds, and missed an edit made in the second it last read the file (two add-components in one
+   request, the second naming a system, which made ASDF read the .asd between them; omnifocus, 2026-11-16)."
   (let* ((path (system-file system)))
     (form-edit::with-scratch-package (scratch)
       (let* ((text (form-edit::file-text path))
@@ -677,12 +688,15 @@
                         (unless at (error "bench: no (:file ~s) in the module ~s to insert after" after module))
                         (append (subseq components 0 (1+ at)) (list new) (subseq components (1+ at))))
                       (append components (list new))))
-                 (new-module (let ((copy (copy-list module-form)))
-                               (setf (getf (cddr copy) :components) new-components)
-                               copy))
+                 (new-module
+                  (let ((copy (copy-list module-form)))
+                    (setf (getf (cddr copy) :components) new-components)
+                    copy))
                  (old-text (subseq text (form-edit::node-start module-node) (form-edit::node-end module-node))))
-            (form-edit::edit-subform path system-name old-text (let ((*package* scratch) (*print-case* :downcase))
-                                                                  (prin1-to-string new-module)))
+            (form-edit::edit-subform path system-name old-text
+                                     (let ((*package* scratch) (*print-case* :downcase))
+                                       (prin1-to-string new-module)))
+            (asdf/find-system:load-asd path)
             path))))))
 
 (defun all-sub-nodes (node)

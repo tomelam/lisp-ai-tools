@@ -89,7 +89,10 @@
       (check "the new form comes after it" (< (search "bench-test-other" text) (search "bench-test-f" text))))
     (check-equal "nothing is pending after the save" (lisp-ai-bench:pending) '())
     (check "the mirror is empty too" (not (search "BENCH-TEST-F" (text-of mirror))))
-    (check-equal "where gives the file" (ignore-errors (truename (lisp-ai-bench:where (sym "BENCH-TEST-F")))) (truename source))
+    (multiple-value-bind (file offset)
+        (lisp-ai-bench:where (sym "BENCH-TEST-F"))
+      (check-equal "where gives the file" (ignore-errors (truename file)) (truename source))
+      (check-equal "and the offset of the form in it" offset (search "(defun bench-test-f" (text-of source))))
     (check-equal "the file reads as two definitions" (length (forms-of source)) 3)))
 
 (defun run-replace (root)
@@ -296,6 +299,30 @@
     (check "a duplicate is refused" (refused-p (lambda () (lisp-ai-bench:add-component "b"))))
     (check "a missing anchor is refused" (refused-p (lambda () (lisp-ai-bench:add-component "e" :after "zz"))))))
 
+(defun run-asdf-sees (root)
+  "add-component makes ASDF read the .asd again. Two add-components in one request, the second naming the .asd's other
+   defsystem, leave ASDF holding both new files: ASDF's own check compares the .asd's date in whole seconds, and missed an
+   edit made in the second it last read the file (omnifocus, 2026-11-16). The systems that add-component made ASDF read
+   here and in run-files are cleared afterwards. The checks run with no ASDF session, as an eval request does: bin/lisp
+   test runs the suite inside test-op's session, which keeps the systems it found until it ends."
+  (let ((asd (merge-pathnames "two/twoproj.asd" root)))
+    (write-text asd "(defsystem \"twoproj\" :components ((:module \"src\" :components ((:file \"a\")))))
+
+(defsystem \"twoproj/tests\" :depends-on (\"twoproj\") :components ((:module \"tests\" :components ((:file \"t1\")))))
+")
+    (unwind-protect
+        (let ((asdf/session:*asdf-session* nil))
+          (asdf/find-system:load-asd asd)
+          (lisp-ai-bench:add-component "b" :module "src" :system "twoproj")
+          (lisp-ai-bench:add-component "t2" :module "tests" :system "twoproj/tests")
+          (flet ((files (system module)
+                   (mapcar #'asdf/component:component-name
+                           (asdf/component:component-children
+                            (asdf/component:find-component (asdf/system:find-system system) module)))))
+            (check-equal "ASDF holds the file added to the first defsystem" (files "twoproj" "src") '("a" "b"))
+            (check-equal "and the file added to the second" (files "twoproj/tests" "tests") '("t1" "t2"))))
+      (dolist (system '("benchproj" "twoproj" "twoproj/tests")) (asdf/system-registry:clear-system system)))))
+
 (defun fresh-sbcl (directory &rest forms)
   "Run FORMS (strings) in a fresh SBCL with ASDF, in DIRECTORY, its compiled files kept in DIRECTORY's fasl/; the output."
   (uiop/run-program:run-program
@@ -437,6 +464,7 @@
           (run-superseded root)
           (run-loose root)
           (run-files root)
+          (run-asdf-sees root)
           (run-fresh-load root)
           (run-load-for-image root))
       (lisp-ai-bench:forget-all)

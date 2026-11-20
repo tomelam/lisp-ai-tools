@@ -187,33 +187,66 @@
   (setf (session-result session) text
         (session-state session) :finished))
 
+(defun read-problem (request package)
+  "NIL when every form of REQUEST reads, else a line saying why not and where. The forms are read with *READ-SUPPRESS*,
+   so nothing is interned, no package need exist yet and #. evaluates nothing: an extra or missing parenthesis, or an
+   unfinished string, is found before any form runs (an extra ) found after the whole request had run, the hackathon,
+   2026-10-27). A reader macro the request itself defines is not known to this pass. Any other serious condition while
+   reading is a problem too, since it must not escape the connection thread."
+  (with-input-from-string (stream request)
+    (handler-case
+     (let ((*package* (find-package package)) (*read-suppress* t))
+       (loop until (eq (read stream nil stream) stream))
+       nil)
+     ((or reader-error end-of-file) (condition)
+      (let* ((at (min (or (ignore-errors (file-position stream)) (length request)) (length request)))
+             (line (1+ (count #\Newline request :end at)))
+             (column (- at (1+ (or (position #\Newline request :end at :from-end t) -1)))))
+        (format nil "the request does not read, so none of its forms was evaluated: ~a, at line ~d, column ~d"
+                (typecase condition
+                  (end-of-file "it ends inside a form or a string")
+                  (simple-condition
+                   (handler-case
+                    (apply #'format nil (simple-condition-format-control condition)
+                           (simple-condition-format-arguments condition))
+                    (error nil (condition-text condition))))
+                  (t (condition-text condition)))
+                line column)))
+     (serious-condition (condition)
+      (format nil "the request could not be read through before evaluation, so none of its forms was evaluated: ~a"
+              (condition-text condition))))))
+
 (defun eval-with-debugging (request package)
   "Evaluate the forms in REQUEST in PACKAGE (a package or its name); the reply is what they print followed by one printed
    line per value. An error from the socket is held and answers at once; any other serious condition, an exhausted stack
    included, becomes a line starting ERROR: instead of a dead server. Returns the reply and, when an error was held, its
    session (the reply was then kept for DEBUG-RESULT). *REQUEST-OBSERVER* sees the request first and the reply as it is
-   sent."
+   sent.
+   A request that does not read is refused whole, before any of its forms runs, and not held (READ-PROBLEM)."
   (let ((reply (make-string-output-stream)) (*session* nil) (*request* request))
     (observe-request :request request reply)
-    (handler-case
-     (restart-case (handler-bind ((error (lambda (condition) (hold-error condition reply))))
-                     (let ((*package* (find-package package)) (*standard-output* reply) (*error-output* reply))
-                       (with-input-from-string (forms request)
-                         (loop with start = 0
-                               for form = (read forms nil forms)
-                               until (eq form forms)
-                               do
-                                 (let* ((end (file-position forms))
-                                        (text (subseq request start (min end (length request)))))
-                                   (observe :before form text reply)
-                                   (let ((values (multiple-value-list (eval form))))
-                                     (observe :after form text reply)
-                                     (dolist (value values) (format reply "~s~%" value)))
-                                   (setf start end))))))
-       (abort-request (&optional condition) :report
-        "Unwind the request and reply with the error, as without debugging."
-        (format reply "ERROR: ~a~%" (condition-text (or condition (session-condition *session*))))))
-     (serious-condition (condition) (format reply "ERROR: ~a~%" (condition-text condition))))
+    (let ((problem (read-problem request package)))
+      (if problem
+          (format reply "ERROR: ~a~%" problem)
+          (handler-case
+           (restart-case (handler-bind ((error (lambda (condition) (hold-error condition reply))))
+                           (let ((*package* (find-package package)) (*standard-output* reply) (*error-output* reply))
+                             (with-input-from-string (forms request)
+                               (loop with start = 0
+                                     for form = (read forms nil forms)
+                                     until (eq form forms)
+                                     do
+                                       (let* ((end (file-position forms))
+                                              (text (subseq request start (min end (length request)))))
+                                         (observe :before form text reply)
+                                         (let ((values (multiple-value-list (eval form))))
+                                           (observe :after form text reply)
+                                           (dolist (value values) (format reply "~s~%" value)))
+                                         (setf start end))))))
+             (abort-request (&optional condition) :report
+              "Unwind the request and reply with the error, as without debugging."
+              (format reply "ERROR: ~a~%" (condition-text (or condition (session-condition *session*))))))
+           (serious-condition (condition) (format reply "ERROR: ~a~%" (condition-text condition))))))
     (let ((text
            (concatenate 'string
                         (if *session*
