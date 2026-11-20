@@ -80,6 +80,42 @@
                         6)))
       (when (probe-file path) (delete-file path)))))
 
+(defun run-headers (directory)
+  "A header that is not comment text is refused, by edit and by new-file, with a message that says so, and nothing is
+   written; edit's header must also end with a newline, or its last comment line swallows the file's first form (found
+   2026-10-23, when the refusal spoke only of a count of forms; new-file's, the weblog demo of 2026-10-25). An empty
+   header removes the old one; new-file needs no final newline, since it writes one."
+  (let ((path (merge-pathnames "form-edit-test-header.lisp" directory))
+        (refused (merge-pathnames "form-edit-test-new-file-refused.lisp" directory))
+        (made (merge-pathnames "form-edit-test-new-file.lisp" directory)))
+    (flet ((refusal (thunk)
+             (handler-case (progn (funcall thunk) nil) (error (e) (princ-to-string e)))))
+      (unwind-protect
+          (progn
+           (write-text path *edit-sample*)
+           (let ((message (refusal (lambda () (form-edit::edit path :header ";;; no newline")))))
+             (check "a header with no final newline is refused, and the message says so"
+              (and message (search "newline" message)))
+             (check "and the file is untouched" (string= (text-of path) *edit-sample*)))
+           (let ((message (refusal (lambda () (form-edit::edit path :header (format nil "new header~%"))))))
+             (check "a header that is not comments is refused, and the message says so"
+              (and message (search "not comment text" message)))
+             (check "and the file is untouched, again" (string= (text-of path) *edit-sample*)))
+           (form-edit::edit path :header "")
+           (check "an empty header removes the old one" (eql 0 (search "(in-package :cl-user)" (text-of path))))
+           (let ((message
+                  (refusal
+                   (lambda ()
+                     (form-edit::new-file refused (format nil "client.lisp: the Lisp side~%")
+                                          "(in-package :cl-user)")))))
+             (check "new-file refuses a header that is not comments, and says so"
+              (and message (search "not comment text" message)))
+             (check "and makes no file" (not (probe-file refused))))
+           (form-edit::new-file made ";;;; no newline" "(in-package :cl-user)")
+           (check-equal "new-file takes a header with no final newline: the header, then the form" (text-of made)
+            (format nil ";;;; no newline~%(in-package :cl-user)~%")))
+        (dolist (file (list path refused made)) (when (probe-file file) (delete-file file)))))))
+
 (defun run-strings (directory)
   "A form named by a string, as (defsystem \"x\" ...) is, can be replaced like one named by a symbol."
   (let ((path (merge-pathnames "form-edit-test-strings.lisp" directory)))
@@ -788,6 +824,7 @@
   (setf *failures* 0)
   (let ((directory (pathname directory)))
     (run-edit directory)
+    (run-headers directory)
     (run-strings directory)
     (run-subform directory)
     (run-atom directory)

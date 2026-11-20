@@ -621,7 +621,8 @@
 
 (defun new-file (file &key package header)
   "Make the source file FILE (relative to the project) with a header comment and an in-package form for PACKAGE (default:
-   the project's package, named like the project). Refused when the file exists."
+   the project's package, named like the project). Refused when the file exists. HEADER, when given, must be comment
+   text (each line beginning with ;): anything else is refused, and no file is made."
   (let ((path (resolve file))
         (package (or package (project))))
     (when (probe-file path) (error "bench: ~a exists already" path))

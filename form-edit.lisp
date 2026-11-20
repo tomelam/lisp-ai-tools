@@ -429,8 +429,23 @@
        "The file ~a was written, but reading it back does not give the text meant (~d characters, ~d meant): look at it before anything else"
        path (length now) (length text)))))
 
+(defun check-header (header &key (newline t))
+  "Signal an error unless HEADER is comment text: it must read as no forms and, when NEWLINE is true and HEADER is not
+   empty, end with a newline, since the first form of the file follows it on the next character."
+  (multiple-value-bind (nodes problem)
+      (with-scratch-package (scratch) (ignore-errors (values (read-nodes header scratch) nil)))
+    (when problem
+      (error "The header is not comment text: it does not read (~a). Begin each of its lines with ;: nothing written"
+             problem))
+    (when nodes
+      (error "The header is not comment text: it reads as ~d form~:p. Begin each of its lines with ;: nothing written"
+             (length nodes)))
+    (when (and newline (plusp (length header)) (char/= (char header (1- (length header))) #\Newline))
+      (error
+       "The header does not end with a newline, so its last line would run into the file's first form: nothing written"))))
+
 (defun edit (path &key replace delete insert-before insert-after append header)
-  "Change the top-level forms of the file PATH. REPLACE, INSERT-BEFORE and INSERT-AFTER are alists of (key . source-text), DELETE is a list of keys, APPEND and HEADER are text. A key is a form's name (the symbol or string after its operator, in upper case) or, for a form with no name, (:form TEXT): the form that reads as TEXT. Every other byte stays as it was. New source text may carry comments between its forms, kept as typed; a comment inside a form is refused. Deleting a form takes the comment after it on its line with it, not the comments above it. An error, and no write, when a key is not exactly one form, when a form to replace or delete is governed by #+ or #-, or when the result does not read back as the other forms, unchanged and in order, followed by exactly the forms meant: the new forms in the file are compared with the forms the sources mean (a source that is text means the forms it reads as, a source that is a form means that form, its symbols the image's), so a printer that wrote something else is caught before the write. A source, and the new code of a subform, may also be a form, not text: any value but a string is printed, in the package of the file's in-package, so it can be built in the image (a form with a symbol of the SCRATCH package is refused). Comments in the new code need text. Returns PATH and, as a second value, what REGISTER-LOCATIONS did: the written definitions that the image already has are given their place in the file, so that M-. finds them."
+  "Change the top-level forms of the file PATH. REPLACE, INSERT-BEFORE and INSERT-AFTER are alists of (key . source-text), DELETE is a list of keys, APPEND and HEADER are text. A key is a form's name (the symbol or string after its operator, in upper case) or, for a form with no name, (:form TEXT): the form that reads as TEXT. Every other byte stays as it was. New source text may carry comments between its forms, kept as typed; a comment inside a form is refused. Deleting a form takes the comment after it on its line with it, not the comments above it. An error, and no write, when a key is not exactly one form, when a form to replace or delete is governed by #+ or #-, or when the result does not read back as the other forms, unchanged and in order, followed by exactly the forms meant: the new forms in the file are compared with the forms the sources mean (a source that is text means the forms it reads as, a source that is a form means that form, its symbols the image's), so a printer that wrote something else is caught before the write. A source, and the new code of a subform, may also be a form, not text: any value but a string is printed, in the package of the file's in-package, so it can be built in the image (a form with a symbol of the SCRATCH package is refused). Comments in the new code need text. Returns PATH and, as a second value, what REGISTER-LOCATIONS did: the written definitions that the image already has are given their place in the file, so that M-. finds them. HEADER is comment text and ends with a newline (an empty HEADER removes the file's header); anything else is refused, since the file's first form follows the header on the next character."
   (with-scratch-package (scratch)
    (let* ((intended
            (intended-forms
@@ -458,6 +473,7 @@
               (when (member node removed) (error "The form ~s is both replaced and deleted, or named twice" name))
               (push node removed)))
        (when header
+         (check-header header)
          (push
           (list 0
                 (if nodes
@@ -520,7 +536,9 @@
                    (register-locations path result result-nodes (changed-nodes untouched result-nodes) scratch))))))))
 
 (defun new-file (path header source)
-  "Write a file made of HEADER (comment text) and the forms of SOURCE, printed."
+  "Write a file made of HEADER (comment text) and the forms of SOURCE, printed. A HEADER that is not comment text is
+   refused, and no file is made."
+  (check-header header :newline nil)
   (with-scratch-package (scratch)
    (with-open-file (s path :direction :output :if-exists :error :external-format :utf-8)
      (write-string header s)
