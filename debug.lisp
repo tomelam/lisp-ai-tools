@@ -83,7 +83,8 @@
 (defun condition-text (condition)
   "CONDITION as text. Printing a condition can itself fail (a malformed format string in its message); that must not
    escape, because an error in a connection thread would end the whole server."
-  (handler-case (princ-to-string condition)
+  (handler-case (let ((*print-circle* t))
+                  (princ-to-string condition))
     (serious-condition ()
       (format nil "~s (its message could not be printed)" (type-of condition)))))
 
@@ -134,8 +135,10 @@
       (format report "NOTE: signalled by a trap, so (debug-restart-frame ...) is refused: it would end the image. Fix the code, then (debug-abandon ~d) and run the request again.~%"
               (session-id session)))
     (format report "restarts:~%")
-    (loop for restart in (session-restarts session) for number from 0
-          do (format report "  ~d ~a  ~a~%" number (restart-name restart) (princ-to-string restart)))
+    (let ((*print-circle* t))
+      (loop for restart in (session-restarts session)
+            for number from 0
+            do (format report "  ~d ~a  ~a~%" number (restart-name restart) (princ-to-string restart))))
     (format report "frames:~%")
     (let ((frames (frame-lines (1+ *frames-shown*))))
       (loop for (number . text) in frames for count from 0 below *frames-shown* do (format report "  ~d ~a~%" number text))
@@ -241,7 +244,8 @@
                                          (observe :before form text reply)
                                          (let ((values (multiple-value-list (eval form))))
                                            (observe :after form text reply)
-                                           (dolist (value values) (format reply "~s~%" value)))
+                                           (let ((*print-circle* t))
+                                             (dolist (value values) (format reply "~s~%" value))))
                                          (setf start end))))))
              (abort-request (&optional condition) :report
               "Unwind the request and reply with the error, as without debugging."
