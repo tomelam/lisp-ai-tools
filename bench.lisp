@@ -59,8 +59,8 @@
   "The file known for each definition about to run, from the :before call of RECORD-FORM, by key.")
 
 (defparameter *definers*
-  '(defun defmacro defgeneric defmethod defvar defparameter defconstant defclass defstruct deftype define-condition
-    define-modify-macro define-symbol-macro define-setf-expander defsetf declaim)
+  '(define-alien-routine defun defmacro defgeneric defmethod defvar defparameter defconstant defclass defstruct deftype
+    define-condition define-modify-macro define-symbol-macro define-setf-expander defsetf declaim)
   "The operators whose top-level forms the ledger records.")
 
 (defun project ()
@@ -102,20 +102,40 @@
     (list name qualifiers (required-specializers (first rest)))))
 
 (defun entry-name-and-key (kind form)
-  "(values name key) for a definition FORM of KIND."
+  "(values name key) for a definition FORM of KIND. A DEFINE-ALIEN-ROUTINE is named by its Lisp name, by SBCL's own rule
+   for the name spec (\"c_name\", lisp-name, or (\"c_name\" lisp-name))."
   (case kind
-    (:defmethod (let ((parts (method-parts form))) (values (first parts) parts)))
-    (:defstruct (let ((name (if (consp (second form)) (first (second form)) (second form)))) (values name name)))
+    (:defmethod
+     (let ((parts (method-parts form)))
+       (values (first parts) parts)))
+    (:defstruct
+     (let ((name
+            (if (consp (second form))
+                (first (second form))
+                (second form))))
+       (values name name)))
     (:declaim (values (prin1-to-string form) (prin1-to-string form)))
+    (:define-alien-routine
+     (let ((name (values (sb-alien::pick-lisp-and-alien-names (second form)))))
+       (values name name)))
     (t (values (second form) (second form)))))
 
 (defun introspect-types (kind)
   "The sb-introspect definition types a definition of KIND may be recorded under."
   (case kind
-    (:defun '(:function)) (:defmacro '(:macro)) (:defgeneric '(:generic-function)) (:defmethod '(:generic-function))
-    ((:defvar :defparameter :defconstant) '(:variable)) (:defclass '(:class)) (:defstruct '(:structure))
-    (:deftype '(:type)) (:define-condition '(:condition)) (:define-symbol-macro '(:symbol-macro))
-    (:defsetf '(:setf-expander)) (:define-setf-expander '(:setf-expander)) (t '())))
+    ((:defun :define-alien-routine) '(:function))
+    (:defmacro '(:macro))
+    (:defgeneric '(:generic-function))
+    (:defmethod '(:generic-function))
+    ((:defvar :defparameter :defconstant) '(:variable))
+    (:defclass '(:class))
+    (:defstruct '(:structure))
+    (:deftype '(:type))
+    (:define-condition '(:condition))
+    (:define-symbol-macro '(:symbol-macro))
+    (:defsetf '(:setf-expander))
+    (:define-setf-expander '(:setf-expander))
+    (t 'nil)))
 
 (defun recorded-source (name kind)
   "(values pathname offset) that the image records for the definition NAME of KIND, or NIL. A definition compiled from
@@ -283,14 +303,37 @@
     (when (symbolp project)
       (remove nil (mapcar #'find-package (list (symbol-name project) (format nil "~a/TESTS" (symbol-name project))))))))
 
+(defun made-by-listed (entries)
+  "The functions that the structures and conditions of ENTRIES (ledger entries) made: a structure's constructors,
+   predicate, copier and accessors, and a condition's readers. Each is a name of its own, which the ledger does not list
+   and for which SBCL records no file until the file is loaded, so without this the image would count it as no file's
+   (the hackathon, 2026-11-03: 36 names after the rerun chains; omnifocus, 2026-11-15: a condition's two readers)."
+  (loop for e in entries
+        append
+          (case (entry-kind e)
+            (:defstruct
+             (let ((dd (sb-kernel:find-defstruct-description (entry-name e) nil)))
+               (when dd
+                 (remove nil
+                         (append (mapcar #'first (sb-kernel:dd-constructors dd))
+                                 (list (sb-kernel:dd-predicate-name dd) (sb-kernel::dd-copier-name dd))
+                                 (mapcar #'sb-kernel:dsd-accessor-name (sb-kernel:dd-slots dd)))))))
+            (:define-condition
+             (let ((classoid (sb-kernel:find-classoid (entry-name e) nil)))
+               (when (typep classoid 'sb-kernel::condition-classoid)
+                 (loop for slot in (sb-kernel:condition-classoid-slots classoid)
+                       append (copy-list (sb-kernel:condition-slot-readers slot)))))))))
+
 (defun loose-definitions (&optional (packages (project-packages)))
   "The functions, macros and generic functions of PACKAGES (by default the project's own and its tests') that the image
    holds, that no file holds and that the ledger does not list: made inside a LET, an EVAL-WHEN or a function, or
    dropped from the ledger without :UNBIND. A restart loses them, and SAVE cannot write them, since the ledger has no
    text for them: define each again at top level through bin/lisp eval, then save it. A function counts as held by a
-   file when SBCL records a file for it or for one of its methods. A (SETF NAME) function is not examined. The symbols,
-   sorted by name."
-  (let ((listed (mapcar #'entry-name (entries :state nil))) (found 'nil))
+   file when SBCL records a file for it or for one of its methods, and as listed when a structure or condition of the
+   ledger made it (MADE-BY-LISTED). A (SETF NAME) function is not examined. The symbols, sorted by name."
+  (let ((listed
+         (let ((all (entries :state nil)))
+           (append (mapcar #'entry-name all) (made-by-listed all)))) (found 'nil))
     (dolist (package packages)
       (do-symbols (symbol package)
         (when
