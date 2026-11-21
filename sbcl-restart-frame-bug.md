@@ -6,7 +6,7 @@ In a non-main thread, a handler-bind handler for a TYPE-ERROR calls `sb-debug:un
 
 **Environment**
 
-macOS (Darwin 25.6.0), Apple silicon. SBCL 2.6.9 (Homebrew) and 2.4.0 (official arm64 binary) crash. SBCL 2.2.9 (official x86-64 binary, under Rosetta, same machine) does not.
+macOS (Darwin 25.6.0), Apple silicon. SBCL 2.6.10 and 2.6.9 (Homebrew) and 2.4.0 (official arm64 binary) crash. SBCL 2.2.9 (official x86-64 binary, under Rosetta, same machine) does not.
 
 **Reproduction** (SBCL only; no Slynk, no ASDF)
 
@@ -55,12 +55,23 @@ Backtrace for: ...
 unhandled condition in --disable-debugger mode, quitting
 ```
 
+On 2.6.10 (Homebrew, arm64 macOS) the restarted call still returns `(:F 6)`, and then the process dies with a different message, in both of two runs (exit 1; CASE=plain printed `ALIVE after 6 s` both times):
+
+```
+CASE type result: (:F 6)
+fatal error encountered in SBCL pid 57362 pthread 0x16f8cf000:
+Control stack exhausted, fault: 0x105df7ff0, PC: 0x100553284
+
+   0:     0x105ff7a00 pc=0x100553280  BAD FRAME
+```
+
 Under a long-running image the same failure has also shown "Memory fault" and "maximum interrupt nesting depth (8) exceeded". The failure appears after the restarted call has returned and the thread has finished, with or without a GC in between. Calling `unwind-to-frame-and-call` from the main thread did not show it in the few cases I tried.
 
 **Results**
 
 | SBCL | platform | CASE=plain | CASE=type |
 |---|---|---|---|
+| 2.6.10 Homebrew | arm64 macOS | ok | crash (control stack exhausted) |
 | 2.6.9 Homebrew | arm64 macOS | ok | crash |
 | 2.4.0 official binary | arm64 macOS | ok | crash |
 | 2.2.9 official binary | x86-64 macOS (Rosetta) | ok | ok |
