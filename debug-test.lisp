@@ -94,13 +94,25 @@
        (format nil "#<PACKAGE \"LISP-AI-DEBUG-TESTS-LATER\">~%LISP-AI-DEBUG-TESTS-LATER::Y~%"))
     (when (find-package :lisp-ai-debug-tests-later) (delete-package :lisp-ai-debug-tests-later))))
 
+(defun run-circular (path)
+  "A circular value is printed with #n= labels, in a value of the reply and in an error's message. Without that the
+   printer never ends and the image dies of an exhausted heap (2026-11-21), so this test then ends the test run too."
+  (check-equal "a circular value is answered, with labels"
+   (socket-request path "(let ((l (list 1 2))) (setf (cddr l) l) l)") (format nil "#1=(1 2 . #1#)~%"))
+  (let* ((reply (socket-request path "(let ((l (list 1 2))) (setf (cddr l) l) (error \"bad ~a\" l))"))
+         (id (held-id reply)))
+    (check "an error whose message holds a circular value is held, and its message is printed with labels"
+     (and id (eql 0 (search (format nil "ERROR: bad #1=(1 2 . #1#)~%HELD ") reply))))
+    (when id (printed (lisp-ai-debug:debug-abandon id))))
+  (check-equal "and the image still answers" (socket-request path "(+ 1 2)") (format nil "3~%")))
+
 (defun run (directory start stop)
   (setf *failures* 0)
   (let* ((path (namestring (merge-pathnames "test-debug.sock" directory))) (server (funcall start path))
          (timeout lisp-ai-debug::*held-timeout*) (broken (fdefinition 'debug-broken)))
     (unwind-protect
          (progn
-          (run-reading path)
+          (progn (run-reading path) (run-circular path))
           ;; an error is held: the reply is at once, and the thread waits
           (let* ((reply (socket-request path "(progn (format t \"before~%\") (lisp-ai-debug-tests::debug-outer 2))"))
                  (id (held-id reply)))
