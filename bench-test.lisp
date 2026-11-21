@@ -276,6 +276,29 @@
            (mapcar #'symbol-name (lisp-ai-bench:loose-definitions)) '("IN-LET" "LISTED")))
       (delete-package package))))
 
+(defun run-made-functions (root)
+  "The functions a defstruct or a define-condition of the ledger made are not loose, though SBCL records no file for them
+   until the file is loaded (the hackathon, 2026-11-03; omnifocus, 2026-11-15). A define-alien-routine is in the ledger,
+   under its Lisp name, so its function is not loose either. A structure made inside a LET still has its functions loose."
+  (declare (ignore root))
+  (let ((package (make-package "BENCH-TEST-MADE" :use '(:cl))))
+    (unwind-protect
+        (let ((lisp-ai-bench:*project* :bench-test-made) (lisp-ai-bench::*ledger* 'nil))
+          (lisp-ai-debug:eval-with-debugging "(defstruct made a)" package)
+          (lisp-ai-debug:eval-with-debugging "(define-condition made-error (error) ((x :reader made-error-x)))"
+                                             package)
+          (lisp-ai-debug:eval-with-debugging "(sb-alien:define-alien-routine (\"getpid\" made-getpid) sb-alien:int)"
+                                             package)
+          (lisp-ai-debug:eval-with-debugging "(let ((n 1)) (declare (ignorable n)) (defstruct in-let b))" package)
+          (check-equal "the ledger lists the structure, the condition and the alien routine, this by its Lisp name"
+           (mapcar (lambda (e) (list (lisp-ai-bench::entry-kind e) (symbol-name (lisp-ai-bench::entry-name e))))
+                   (lisp-ai-bench::entries :state nil))
+           '((:defstruct "MADE") (:define-condition "MADE-ERROR") (:define-alien-routine "MADE-GETPID")))
+          (check-equal "their functions are not loose; those of a structure made inside a let are"
+           (mapcar #'symbol-name (lisp-ai-bench:loose-definitions))
+           '("COPY-IN-LET" "IN-LET-B" "IN-LET-P" "MAKE-IN-LET")))
+      (delete-package package))))
+
 (defun run-files (root)
   "new-file makes a source file with a header and an in-package, once; add-component puts a (:file ...) into the .asd after
    a named file or at the end, as forms, and refuses a duplicate."
@@ -463,6 +486,7 @@
           (run-drop-and-scratch root)
           (run-superseded root)
           (run-loose root)
+          (run-made-functions root)
           (run-files root)
           (run-asdf-sees root)
           (run-fresh-load root)
