@@ -390,8 +390,9 @@
 (defun hook-verdict (hook-json forbidden lisp-files)
   "NIL if the Claude Code hook payload HOOK-JSON may proceed, else the refusal message. A Bash call is refused when it
    would write a Lisp code file, or when one of its simple commands runs a program of FORBIDDEN whose own arguments name
-   Lisp (LISP-FILES); a call of Edit, MultiEdit or Write is judged by FILE-EDIT-REFUSAL. Other tools are not judged. A
-   payload that cannot be read is refused."
+   Lisp (LISP-FILES); a Monitor call runs a shell command too and is judged the same way (one with no command, a
+   WebSocket, goes through). A call of Edit, MultiEdit or Write is judged by FILE-EDIT-REFUSAL. Other tools are not
+   judged. A payload that cannot be read is refused."
   (let ((payload (ignore-errors (com.inuoe.jzon:parse hook-json))))
     (if (not (hash-table-p payload))
         "bin/lisp guard could not read the hook payload as JSON, so it refuses the call."
@@ -400,7 +401,7 @@
                 (let ((input (gethash "tool_input" payload)))
                   (and (hash-table-p input) input))))
           (cond
-           ((equal tool "Bash")
+           ((member tool '("Bash" "Monitor") :test #'equal)
             (let ((command (and input (gethash "command" input))))
               (when (stringp command)
                 (let ((written (written-lisp-files command lisp-files)))
