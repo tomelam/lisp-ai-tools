@@ -116,7 +116,7 @@
        (values name name)))
     (:declaim (values (prin1-to-string form) (prin1-to-string form)))
     (:define-alien-routine
-     (let ((name (first (sb-alien::pick-lisp-and-alien-names (second form)))))
+     (let ((name (values (sb-alien::pick-lisp-and-alien-names (second form)))))
        (values name name)))
     (t (values (second form) (second form)))))
 
