@@ -83,6 +83,19 @@ git status" nil)))
   ;; a hook payload that cannot be read is refused loudly, never waved through
   (check "a payload that is not JSON is refused" (stringp (verdict "not json"))))
 
+(defun run-monitor ()
+  "The Monitor tool runs a shell command too, so the gate judges its command as it judges Bash's (2026-11-20: wc -l on a
+   .lisp file was refused through Bash and ran through Monitor). A Monitor with no command, a WebSocket, goes through."
+  (let ((refusal (verdict (hook-json "Monitor" "cat f.lisp"))))
+    (check "a Monitor command that runs a forbidden program on Lisp is refused" (stringp refusal))
+    (check "and the message names the program" (and refusal (search "cat" refusal))))
+  (check "a Monitor command that writes a Lisp file is refused"
+   (stringp (verdict (hook-json "Monitor" "echo '(defun f ())' > src/f.lisp"))))
+  (check "an allowed Monitor command goes through"
+   (null (verdict (hook-json "Monitor" "tail -f run/lisp-server.log"))))
+  (check "a Monitor with no command goes through"
+   (null (verdict "{\"tool_name\":\"Monitor\",\"tool_input\":{\"ws\":{\"url\":\"wss://x\"}}}"))))
+
 (defun run-guard-wrappers ()
   "Wrappers with options that take a value, shells given a script, eval and find -exec: the program inside is still
    the program that runs. Each row is a command and the forbidden programs it runs; rows ending in nil run none."
@@ -372,7 +385,8 @@ EOF
     (run-socket-replies guard))
   (let ((settings (com.inuoe.jzon:parse
                    (uiop:read-file-string (merge-pathnames ".claude/settings.json" (uiop:ensure-directory-pathname project))))))
-    (check "the project settings wire bin/lisp guard as a PreToolUse hook on Bash" (guard-hook-wired-p settings "Bash"))
+    (check "the project settings wire bin/lisp guard as a PreToolUse hook on Bash and on Monitor"
+     (and (guard-hook-wired-p settings "Bash") (guard-hook-wired-p settings "Monitor")))
     (check "and on the tools that change a file by its path" (guard-hook-wired-p settings "Edit|Write|MultiEdit"))
     (check "and carry no permissions.deny list: the gate decides by what a command names"
            (null (gethash "deny" (or (gethash "permissions" settings) (make-hash-table)))))
@@ -411,8 +425,16 @@ EOF
     (write-file (merge-pathnames "rules/lisp-files.sexp" root) (format nil "~s~%" *lisp-files*))
     (write-file (merge-pathnames "src/a.lisp" root) (format nil "(x)~%"))
     (unwind-protect
-         (progn (run-guard) (run-guard-wrappers) (run-guard-structure) (run-lisp-files) (run-writers)
-                (run-file-edit directory) (run-hook root) (progn (run-gate-directory root) (run-paths-that-exist root)))
+         (progn
+          (run-guard)
+          (run-monitor)
+          (run-guard-wrappers)
+          (run-guard-structure)
+          (run-lisp-files)
+          (run-writers)
+          (run-file-edit directory)
+          (run-hook root)
+          (progn (run-gate-directory root) (run-paths-that-exist root)))
       (when (probe-file root) (uiop:delete-directory-tree root :validate t))))
   (run-project project)
   *failures*)
