@@ -24,16 +24,23 @@ pinned by its `qlfile.lock`.
 
 ### Layer 1: `lisp-ai.el`, for any project
 
+Each function is shown as `C-h f` (`describe-function`) shows it: shaped like a call, with the parameters in capitals.
+Parameters after `&optional` may be left out; those after `&key` may be left out and are given by name (`:flash t`).
+A function with `&key` is defined with `cl-defun` (from `cl-lib`), since plain `defun` does not accept `&key`.
+
 | Function | Does | Comes from |
 | --- | --- | --- |
-| `lisp-ai-project-root (&optional dir)` | The project: the nearest directory upwards that holds `bin/lisp`. Never derived from a directory's name. | new |
-| `lisp-ai-load-sly (root)` | Load the Emacs half of the Sly the project pins: `ROOT/.qlot/dists/quicklisp/software/sly-*`, which Qlot links to that date's checkout. An error when there is none or more than one, and when another Sly is already loaded in this Emacs (as now). | both `--sly-directory`, fixed |
-| `lisp-ai-port (root)` | The port in `ROOT/rules/slynk.sexp`. | both `-port` |
-| `lisp-ai-connect (root &optional window)` | Close a leftover connection, connect Sly to `127.0.0.1` at that port, show the REPL in WINDOW. Also the reconnect after an image restart. | both setups, `aquarium-demo-reconnect` |
-| (installed by `lisp-ai-connect`) | In the REPL: RET sends input even under paredit; the end of the REPL stays in view. | `--give-return-back-to-sly`, `gps-demo--follow` |
-| `lisp-ai-watch (root file &key flash on-revert)` | Visit FILE, redraw it within half a second of a change on disk (polling: the files are replaced by a rename); with FLASH, bring the changed part into view and flash it; ON-REVERT for anything else (the tank's "stay at the top"). | both `--watch`, `--changed-region`, `--flash` |
-| `lisp-ai-eval-now (root request)` | Send REQUEST through `bin/lisp eval` and wait: `(EXIT-STATUS . OUTPUT)`. | `aquarium-demo--lisp-now` |
-| `lisp-ai-eval-async (root requests done)` | Send REQUESTS one after another without blocking Emacs; call DONE with nil, or with the failing reply. A reply with `HELD n` is abandoned first (`(debug-abandon n)`), so the image is not left waiting. | `aquarium-demo--send` |
+| `(lisp-ai-project-root &optional DIR)` | The project: the nearest directory upwards from DIR (default: the current buffer's) that holds `bin/lisp`. Never derived from a directory's name. | new |
+| `(lisp-ai-load-sly ROOT)` | Load the Emacs half of the Sly the project pins: `ROOT/.qlot/dists/quicklisp/software/sly-*`, which Qlot links to that date's checkout. An error when there is none or more than one, and when another Sly is already loaded in this Emacs (as now). | both `--sly-directory`, fixed |
+| `(lisp-ai-port ROOT)` | The port in `ROOT/rules/slynk.sexp`. | both `-port` |
+| `(lisp-ai-connect ROOT &optional WINDOW)` | Close a leftover connection, connect Sly to `127.0.0.1` at that port, show the REPL in WINDOW. Also the reconnect after an image restart. | both setups, `aquarium-demo-reconnect` |
+| `(lisp-ai-watch ROOT FILE &key FLASH ON-REVERT)` | Visit FILE, redraw it within half a second of a change on disk (polling: the files are replaced by a rename); with FLASH, bring the changed part into view and flash it; ON-REVERT, a function, for anything else (the tank's "stay at the top"). | both `--watch`, `--changed-region`, `--flash` |
+| `(lisp-ai-eval-now ROOT REQUEST)` | Send REQUEST through `bin/lisp eval` and wait: `(EXIT-STATUS . OUTPUT)`. | `aquarium-demo--lisp-now` |
+| `(lisp-ai-eval-async ROOT REQUESTS DONE)` | Send REQUESTS one after another without blocking Emacs; call DONE with nil, or with the failing reply. A reply with `HELD n` is abandoned first (`(debug-abandon n)`), so the image is not left waiting. | `aquarium-demo--send` |
+
+`lisp-ai-connect` also puts two fixes in place in the REPL buffer (from `--give-return-back-to-sly` and
+`gps-demo--follow`): RET sends the input to the image even when paredit is on, and the end of the REPL stays in view as
+the image writes to it.
 
 Requests go through `bin/lisp eval`, not through Sly (decided 2026-11-23): that path already gives held errors, the
 ledger and the echo, and a request sent over Sly would need its own thread to hold an error. `data-flow.md` gains a
