@@ -23,8 +23,10 @@ project's name in place of `omnifocus`.
       ▼
 ```
 
-In the samples, `⏎` is a newline. A Lisp value is written as Lisp writes it (`3`, `(+ 1 2)`); a Lisp string has
-double quotes (`"(+ 1 2)"`); bytes on a socket or a pipe have no quotes.
+In the samples, `⏎` is a newline. Bytes on a socket or a pipe have no quotes. Inside the image, a Lisp string has
+double quotes (`"(+ 1 2)"`, 7 characters), and any other value is written as Lisp's printer writes it: `3` is an
+integer, and `(+ 1 2)` without quotes is a list, three cons cells holding the symbol `+` and the integers 1 and 2,
+not characters. Steps 2, 3 and 4 run inside the image; step 4 of A draws the list's cells.
 
 ## A. A request and its values
 
@@ -52,9 +54,16 @@ Claude Code's tool `mcp__lisp__eval`. The shell path, `bin/lisp eval`, joins at 
        │ "(+ 1 2)"                     not a hook payload: (lisp-ai-guard:hook-payload-p "(+ 1 2)") ⇒ NIL
        ▼
 ( 4 eval-with-debugging )              tools · debug.lisp
-       │   read      "(+ 1 2)"  ⇒  (+ 1 2)       a list of three objects: the symbol +, 1 and 2
-       │   evaluate  (+ 1 2)    ⇒  3             a number, not text
-       │   print     3          ⇒  "3⏎"          with *print-circle* on: values become text HERE
+       │   read: the string "(+ 1 2)", 7 characters, becomes a list, 3 cons cells in the image's memory:
+       │
+       │        ┌───┬───┐    ┌───┬───┐    ┌───┬───┐
+       │        │ • │ •─┼───►│ • │ •─┼───►│ • │ ╱ │      ╱ = NIL, the end of the list
+       │        └─┼─┴───┘    └─┼─┴───┘    └─┼─┴───┘
+       │          ▼            ▼            ▼
+       │       symbol +    integer 1    integer 2       no parentheses, no spaces: those were the text's
+       │
+       │   evaluate: that list  ⇒  3                     the integer 3, not text
+       │   print:    3          ⇒  "3⏎"                  with *print-circle* on: values become text HERE
        │
        │ "3⏎"                          the reply, returned to step 3, then 2
        ▼
