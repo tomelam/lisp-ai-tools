@@ -53,7 +53,7 @@ All in `lisp-ai-tools.asd`. A project names the ones it uses in its own `.asd`.
 
 Beside them: `lisp`, the one shell script a project's `bin/lisp` runs; `mcp-door`, the image as an MCP server for Claude Code (`bin/lisp mcp`); `quiet-init.lisp`, SBCL's `--userinit` that
 mutes redefinition warnings about the libraries only; `qlot-setup.lisp`, Qlot's setup file pinning `cl+ssl` to
-openssl@3 on this Mac; `rules/`, the two rules files the gate reads, which a project copies; `qlfile`, so that the
+Homebrew's openssl@3 on macOS; `rules/`, the two rules files the gate reads, which a project copies; `qlfile`, so that the
 repo can run its own gate (below); `data-flow.md`, diagrams of a request and its reply, from Claude Code or the shell
 into the image and back, with sample data on each arrow and a table of where values are printed; and
 `sbcl-restart-frame-bug.md`, a report of an SBCL arm64 fault found on the way.
@@ -183,8 +183,8 @@ Four projects use it today (2026-10-30): `aquarium` ([github.com/tomelam/aquariu
 a demo tank of fish drawn as text once a second and changed while it runs; `paip-gps`, a second demo, Norvig's General
 Problem Solver changed while it runs; `code-as-data`; and the hackathon's Lisp workspace, frozen at `b3dab17` for its
 reruns. The first three pin `7b7a78b`. Their `CLAUDE.md` files and the tree's `docs/workbench.md` hold the full method.
-The open work on these tools is kept with the projects', on Tom's machine, in the tree's `NEXT.md` (its table "By
-repo", the row lisp-ai-tools); this repo holds no list of its own.
+The open work on these tools is kept outside this repo, with the projects', in the `NEXT.md` of the tree they are
+developed in (its table "By repo", the row lisp-ai-tools); this repo holds no list of its own.
 
 ## Testing
 
