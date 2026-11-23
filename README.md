@@ -5,8 +5,8 @@ programmer does: **inside a running SBCL image, not by editing text.** A project
 the human both talk to it. A definition is made in the image, tested there, and only then written to its source file,
 as forms, with its comments and docstring intact. The source file is a record of the image, written out on purpose.
 
-Built for the projects under Tom Elam's `~/lisp-ai/` tree (SBCL 2.6.9, macOS arm64, Sly/Slynk, Qlot). Everything here
-is shared by every project; a project installs it with Qlot and uses it as it is.
+Developed on SBCL 2.6.9, macOS arm64, with Sly/Slynk and Qlot. Everything here is shared by every project that uses
+it; a project installs it with Qlot and uses it as it is.
 
 ## The idea in one picture
 
