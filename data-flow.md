@@ -1,6 +1,6 @@
 # Data flow: a request, its reply, and where values become text
 
-These diagrams show how a piece of Lisp travels from Claude Code (or Tom) into a project's always-on image and how the
+These diagrams show how a piece of Lisp travels from Claude Code (or the shell) into a project's always-on image and how the
 reply travels back. Each arrow is labelled with sample data: what actually passes along it. They answer two
 questions: which code owns each step, and where values are printed, that is, turned into text.
 
@@ -103,7 +103,7 @@ Two observers see each request as step 4 works. Neither prints a value: they pas
        │ claude> (+ 1 2)⏎3⏎                      ▼
        ▼                                  ═══ ledger, mirrored to run/pending.sexp ═══
 ┌─────────────────────────┐
-│ Tom's Sly REPL (Emacs)  │
+│ the Sly REPL (Emacs)    │
 └─────────────────────────┘
 ```
 
@@ -181,15 +181,15 @@ socket, and step 3 sends it elsewhere.
 A reply that does not start with `OK:` (no image, a dropped connection, an image that read the payload as Lisp) is no
 answer: `bin/lisp guard` then judges in a fresh SBCL with `lisp-ai-guard:respond`, about 2 s, and denies if that fails.
 
-## D. Tom's Sly REPL: a different path
+## D. The programmer's Sly REPL: a different path
 
-What Tom types at his Sly REPL does not touch any step above. Sly in Emacs talks to Slynk in the image over TCP, on
+What the programmer types at the Sly REPL does not touch any step above. Sly in Emacs talks to Slynk in the image over TCP, on
 127.0.0.1 at the port in the project's `rules/slynk.sexp`. Slynk, from Quicklisp, evaluates and prints with its own
 settings.
 
 ```
 ┌─────────────────────────┐
-│ Tom's Sly REPL (Emacs)  │
+│ the Sly REPL (Emacs)    │
 └──────┬──────────────────┘
        │ (car 'fish), inside a message of Sly's own protocol, over TCP
        ▼
@@ -197,7 +197,7 @@ settings.
        │ the value, printed by Slynk's settings; its error goes to Sly's own debugger, not to HELD
        ▼
 ┌─────────────────────────┐
-│ Tom's Sly REPL (Emacs)  │
+│ the Sly REPL (Emacs)    │
 └─────────────────────────┘
 ```
 
@@ -215,6 +215,6 @@ into the same REPL buffer, after `claude>`.
 | 4, what the request's own code prints | the request (`(print l)`, `(format t "~s" l)`) | whatever that code prints | **off**: a circular value printed there still kills the image (known from where the binding sits, not tested) |
 | the echo | tools, `echo.lisp` | nothing: it copies two strings that already exist | does not apply |
 | `form-edit` writing a form into a file | tools, `form-edit.lisp` | the new form | does not print labels: a shared list was written as `((1 2) (1 2))` with `*print-circle*` on around the call (checked 2026-11-22) |
-| Slynk answering Tom's REPL | Slynk (Quicklisp) | the value of what Tom typed | off in Slynk's print settings (`slynk:*slynk-pprint-bindings*`); a circular value there is not tested |
+| Slynk answering the Sly REPL | Slynk (Quicklisp) | the value of what the programmer typed | off in Slynk's print settings (`slynk:*slynk-pprint-bindings*`); a circular value there is not tested |
 
 Very large values that do not loop are printed in full at every step of the table: nothing limits their length.
