@@ -5,7 +5,7 @@ programmer does: **inside a running SBCL image, not by editing text.** A project
 the human both talk to it. A definition is made in the image, tested there, and only then written to its source file,
 as forms, with its comments and docstring intact. The source file is a record of the image, written out on purpose.
 
-Developed on SBCL 2.6.9, macOS arm64, with Sly/Slynk and Qlot. Everything here is shared by every project that uses
+Developed on SBCL 2.6.10, macOS arm64, with Sly/Slynk and Qlot. Everything here is shared by every project that uses
 it; a project installs it with Qlot and uses it as it is.
 
 ## The idea in one picture
@@ -215,5 +215,5 @@ nothing covered the Edit and Write tools or recorded what the image held that no
 
 ## Requirements
 
-SBCL (developed on 2.6.9, arm64 macOS), Qlot, Quicklisp dist 2026-01-01 or later for Slynk, Eclector and
+SBCL (developed on 2.6.10, arm64 macOS), Qlot, Quicklisp dist 2026-01-01 or later for Slynk, Eclector and
 `com.inuoe.jzon`. Emacs with Sly at the same commit as Slynk for the editor link, optional.
