@@ -54,7 +54,9 @@ All in `lisp-ai-tools.asd`. A project names the ones it uses in its own `.asd`.
 Beside them: `lisp`, the one shell script a project's `bin/lisp` runs; `mcp-door`, the image as an MCP server for Claude Code (`bin/lisp mcp`); `quiet-init.lisp`, SBCL's `--userinit` that
 mutes redefinition warnings about the libraries only; `qlot-setup.lisp`, Qlot's setup file pinning `cl+ssl` to
 openssl@3 on this Mac; `rules/`, the two rules files the gate reads, which a project copies; `qlfile`, so that the
-repo can run its own gate (below); and `sbcl-restart-frame-bug.md`, a report of an SBCL arm64 fault found on the way.
+repo can run its own gate (below); `data-flow.md`, diagrams of a request and its reply, from Claude Code or the shell
+into the image and back, with sample data on each arrow and a table of where values are printed; and
+`sbcl-restart-frame-bug.md`, a report of an SBCL arm64 fault found on the way.
 
 ## How a change flows
 
