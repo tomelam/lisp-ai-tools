@@ -204,6 +204,39 @@ settings.
 A definition typed there is not in the ledger (`bin/lisp eval` is the only way in that records). The echo of A writes
 into the same REPL buffer, after `claude>`.
 
+## E. A demo step from Emacs: the shell path, not Sly
+
+The Emacs half (`lisp-ai.el`) sends its requests through `bin/lisp eval`, as the shell does in A, not over Sly's
+connection of D: so a request from Emacs gets the held errors of B, the ledger and the echo. The sample is step 1 of
+`aquarium`'s demo, sent by SPACE in the caption window (reply taken from a clone's image on 2026-11-23).
+
+```
+┌──────────────────────────────┐
+│ Emacs: SPACE in the captions │
+└──────┬───────────────────────┘
+       │ "(add-fish *tank* \"Eve\" :x 5 :y 6 :dx 1)"      the step's :send, from demo/steps.sexp
+       ▼
+( lisp-ai-demo-next )                  tools · lisp-ai-demo.el
+       ▼
+( lisp-ai-eval-async )                 tools · lisp-ai.el: a process, so Emacs does not wait
+       │ bin/lisp eval '(add-fish *tank* "Eve" :x 5 :y 6 :dx 1)'
+       ▼
+( steps 2 to 4 of A )                  the request is read, evaluated and printed in the image; the echo of A
+       │                               writes it into the Sly REPL after claude>
+       │ #S(FISH :NAME "Eve" :X 5 :Y 6 :DX 1)⏎
+       ▼
+( lisp-ai-eval-async )                 not ERROR: and not HELD n, so the next request of the step, if any
+       │ nil                           DONE is called with nil: no failure
+       ▼
+┌──────────────────────────────┐
+│ Emacs: the step's :look      │
+└──────────────────────────────┘
+```
+
+A reply that starts with `ERROR:` or `HELD n` stops the step: for `HELD n`, `lisp-ai-eval-async` first sends
+`(debug-abandon n)` through `bin/lisp eval` and waits for it, so the image's thread is not left waiting for 300 s; the
+rest of the step's requests are not sent, and DONE is called with the reply, which the caption window shows.
+
 ## Where a value becomes text
 
 | Step | Owner | What is printed | `*print-circle*` |
