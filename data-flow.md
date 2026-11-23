@@ -4,11 +4,11 @@ These diagrams show how a piece of Lisp travels from Claude Code (or the shell) 
 reply travels back. Each arrow is labelled with sample data: what actually passes along it. They answer two
 questions: which code owns each step, and where values are printed, that is, turned into text.
 
-The samples were taken on 2026-11-22 from the `omnifocus` image at tools `1c8a365`. Every reply shown (`3`,
-`#1=(1 2 . #1#)`, the `ERROR:` and `HELD 1` text, `OK:`) is a real reply, shortened only where `…` says so. The JSON
-around them is built from the code of `mcp-door` and `lisp`, not captured; the `id` 7 and the path `/path/to/project`
-are made up. The project's side is the same in every project (its `src/server.lisp` files are near-copies), with the
-project's name in place of `omnifocus`.
+The samples were taken on 2026-11-23 from the `aquarium` image at tools `1c8a365`, through `bin/lisp eval`. Every
+reply shown (`3`, `#1=(1 2 . #1#)`, the `ERROR:` and `HELD 1` text, `OK:`) is a real reply, shortened only where `…`
+says so. The JSON around them is built from the code of `mcp-door` and `lisp`, not captured; the `id` 7 and the path
+`/path/to/project` are made up. The project's side is the same in every project (its `src/server.lisp` files are
+near-copies), with the project's name in place of `aquarium`.
 
 ## How to read them
 
@@ -118,7 +118,7 @@ comes as a request of its own.
 └──────┬───────┘
        │ (car 'fish)                   through steps 1 to 3, as in A
        ▼
-( 4 eval-with-debugging )              tools · debug.lisp, thread "omnifocus connection"
+( 4 eval-with-debugging )              tools · debug.lisp, thread "aquarium connection"
        │   evaluate (car 'fish)  ⇒  a TYPE-ERROR condition: FISH is not a LIST
        │   hold-error: print the message, the restarts and the frames, and send them NOW
        │   (through *reply-now*, which step 2 bound); then the thread waits, up to 300 s
@@ -126,7 +126,7 @@ comes as a request of its own.
        │ ERROR: The value⏎  FISH⏎is not of type⏎  LIST⏎when binding LIST⏎
        │ HELD 1: the thread is waiting and nothing was unwound. …⏎
        │ restarts:⏎  0 ABORT-REQUEST  Unwind the request and reply with the error, …⏎ …
-       │ frames:⏎  0 (CAR FISH) [external]⏎  1 … ⏎  3 (EVAL-WITH-DEBUGGING "(car 'fish)" :OMNIFOCUS)⏎ …
+       │ frames:⏎  0 (CAR FISH) [external]⏎  1 … ⏎  3 (EVAL-WITH-DEBUGGING "(car 'fish)" :AQUARIUM)⏎ …
        ▼
 ┌──────────────┐
 │ Claude Code  │
