@@ -1,6 +1,10 @@
 # The Emacs half of the tools: a design
 
-Status: written 2026-11-23, waiting for approval. Nothing here is built.
+Status: written and approved 2026-11-23, and built the same day: `lisp-ai.el`, `lisp-ai-demo.el`,
+`lisp-ai-emacs-test.el`, with `aquarium` and `paip-gps` on them (their branches `emacs-layer`). Built as designed, with
+these choices the design left open: a watched screen is `lisp-ai-demo` without `:caption-lines`, so both projects use
+`M-x lisp-ai-demo`; the layout is given to `lisp-ai-demo-configure`, since an `M-x` command takes no arguments; the
+caption buffer is `*lisp-ai demo*`.
 
 ## Why
 

@@ -58,6 +58,25 @@ repo can run its own gate (below); `data-flow.md`, diagrams of a request and its
 into the image and back, with sample data on each arrow and a table of where values are printed; and
 `sbcl-restart-frame-bug.md`, a report of an SBCL arm64 fault found on the way.
 
+## The Emacs half
+
+Two Emacs Lisp files reach a project the way the Lisp code does, through its Qlot install, pinned by its
+`qlfile.lock` (design: `emacs-design.md`).
+
+- `lisp-ai.el`, for any project: `lisp-ai-project-root`, `lisp-ai-load-sly` (the Sly the project's Qlot install pins,
+  refused when another Sly is loaded), `lisp-ai-port`, `lisp-ai-connect` and `M-x lisp-ai-reconnect` (in the REPL, RET
+  works under paredit and the end stays in view as the image writes), `lisp-ai-watch` (a file redrawn within half a
+  second of a change on disk, flashed where it changed), and `lisp-ai-eval-now` and `lisp-ai-eval-async`, requests
+  through `bin/lisp eval` (a held error is abandoned, so the image is not left waiting).
+- `lisp-ai-demo.el`: `M-x lisp-ai-demo`, a demo screen. With a caption window it is stepped by the project's
+  `demo/steps.sexp` (`:file`, `:start`, `:quit`, `:intro`, `:end`, `:steps`); SPACE goes on, `q` ends and puts `:file`
+  back as committed. Without one, the screen is only watched.
+
+A project's `demo.el` reads `.qlot/dists/lisp-ai-tools/distinfo.txt` for the pinned commit, loads the two files from
+that commit's directory, loads the Sly and gives its layout to `lisp-ai-demo-configure`. `lisp-ai-emacs-test.el` holds
+the shared checks, which a project's `tests/demo-test.el` calls in batch Emacs (`Emacs --batch -Q -l
+tests/demo-test.el`) with the image up. `.el` files are not Lisp to the gate: they are edited as text.
+
 ## How a change flows
 
 1. **Define it in the image.** `bin/lisp eval '(defun fish-glyph (f) ...)'`, read in the project's package. Comments
@@ -195,7 +214,9 @@ comment above it, a comment inside it and a docstring reached its file byte for 
 the inner comment was refused by name.
 
 Tests run from clean clones of a project, never against a running image someone is attached to. `bin/lisp test` in a
-project runs this repo's tests among its own.
+project runs this repo's tests among its own. The Emacs half is tested by each project's `tests/demo-test.el`, run by
+hand; each check that `lisp-ai-emacs-test.el` added was broken once and watched failing (2026-11-23, in a clone of
+`aquarium`: 10 failures, each where it was meant).
 
 ## The repo gates itself
 
