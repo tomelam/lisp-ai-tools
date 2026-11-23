@@ -40,9 +40,15 @@
 
 (defun lisp-ai-test-project (root)
   "Check finding the project, its port and its Sly, and refusing a wrong Sly. ROOT is the project under test."
-  (lisp-ai-test-report "lisp-ai.el is loaded from the project's Qlot install"
-                       (string-prefix-p (file-truename (expand-file-name ".qlot/" root))
-                                        (file-truename lisp-ai-directory)))
+  ;; software/ holds links into Qlot's cache, so the names are compared as given, not as true names
+  (lisp-ai-test-report "lisp-ai.el is loaded from the commit the project's Qlot install pins"
+                       (with-temp-buffer
+                         (insert-file-contents (expand-file-name ".qlot/dists/lisp-ai-tools/distinfo.txt" root))
+                         (and (re-search-forward "^version: git-\\([0-9a-f]+\\)$" nil t)
+                              (string= (directory-file-name lisp-ai-directory)
+                                       (expand-file-name (format ".qlot/dists/lisp-ai-tools/software/lisp-ai-tools-ref-%s"
+                                                                 (match-string 1))
+                                                         root)))))
   (lisp-ai-test-report "the project is found from a directory inside it"
                        (string= (file-truename (lisp-ai-project-root (expand-file-name "src/" root)))
                                 (file-truename root)))
