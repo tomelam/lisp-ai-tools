@@ -1,4 +1,4 @@
-;;;; tools/qlot-setup.lisp -- loaded by Qlot (via QLOT_SETUP_FILE, set in tools/qlot) in place of its own
+;;;; tools/qlot-setup.lisp -- loaded by Qlot (via QLOT_SETUP_FILE, set by the script lisp: bin/lisp qlot) in place of its own
 ;;;; setup file. Qlot's cl+ssl hard-codes /opt/homebrew/opt/openssl/lib/libcrypto.dylib, which Homebrew
 ;;;; now points at openssl@4, and OpenSSL 4 removed ASN1_STRING_data. So load Qlot's real setup, then
 ;;;; pin BOTH libraries to openssl@3 (never one of each) before cl+ssl is loaded.
