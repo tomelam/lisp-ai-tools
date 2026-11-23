@@ -84,7 +84,9 @@ Qlot update leaves the old releases in `software/` (18 of them in `aquarium` tod
 
 1. Tools branch `emacs-layer`: the two files, the shared tests, the README, diagram E in `data-flow.md`.
 2. `aquarium` branch: pin the new tools, `demo.el` cut down to its layout, the new keys in `demo/steps.sexp`.
-3. `paip-gps` branch: the same; its demo stays screen-only (no steps), as today, unless Tom wants steps.
+3. `paip-gps` branch: the same; its demo stays as today, unless Tom wants steps: it sets up the screen to watch (the
+   source, and the REPL with the echo) and has no captions and no steps, so what happens is done by someone else, a
+   Claude session through `bin/lisp eval` or the programmer at the REPL.
 4. Tested from clean clones of both; merged one at a time, asking before each merge.
 
 ## Not in it
@@ -97,6 +99,7 @@ Qlot update leaves the old releases in `software/` (18 of them in `aquarium` tod
 
 ## Questions for Tom
 
-1. `paip-gps`: keep its demo screen-only, or give it steps?
+1. `paip-gps`: keep its demo as a screen to watch while someone else does the work (no captions, no steps), or give it
+   a scripted demo like `aquarium`'s, with captions, SPACE and `q`, and its own `demo/steps.sexp`?
 2. Names: the prefix `lisp-ai-` for the functions, and `M-x lisp-ai-demo` and `M-x lisp-ai-reconnect` as the commands,
    in place of `M-x aquarium-demo` and `M-x gps-demo`?
