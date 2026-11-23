@@ -179,10 +179,9 @@ What the project supplies:
 - To show the conversation in the Sly REPL: `lisp-ai-tools/echo` among the dependencies and `(lisp-ai-echo:start)` in
   `bin/serve.lisp`, after Slynk is started.
 
-Four projects use it today (2026-10-30): `aquarium` ([github.com/tomelam/aquarium](https://github.com/tomelam/aquarium)),
-a demo tank of fish drawn as text once a second and changed while it runs; `paip-gps`, a second demo, Norvig's General
-Problem Solver changed while it runs; `code-as-data`; and the hackathon's Lisp workspace, frozen at `b3dab17` for its
-reruns. The first three pin `7b7a78b`. Their `CLAUDE.md` files and the tree's `docs/workbench.md` hold the full method.
+The public example is `aquarium` ([github.com/tomelam/aquarium](https://github.com/tomelam/aquarium)), a demo tank of
+fish drawn as text once a second and changed while it runs; other projects use the tools the same way. Each project
+pins the commit it uses in its `qlfile.lock`, and its `CLAUDE.md` holds the method as it applies there.
 The open work on these tools is kept outside this repo, with the projects', in the `NEXT.md` of the tree they are
 developed in (its table "By repo", the row lisp-ai-tools); this repo holds no list of its own.
 
